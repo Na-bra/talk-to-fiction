@@ -53,7 +53,7 @@ password, copy `accessToken`, click **Authorize** and paste it. The raw spec is 
 
 ```env
 PORT=4000
-CLIENT_ORIGIN=                       # deployed client origin; empty allows any
+CLIENT_ORIGIN=                       # client origin(s), comma-separated; empty allows any
 
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_PUBLISHABLE_KEY=            # "anon" on older projects; safe to expose

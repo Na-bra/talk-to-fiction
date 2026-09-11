@@ -9,9 +9,9 @@ import { DbError } from './data/db.js';
 
 const app = express();
 // The client is deployed separately, so it always calls this API cross-origin.
-// CLIENT_ORIGIN pins the allowed origin in production; unset means allow all,
+// CLIENT_ORIGIN pins the allowed origins in production; unset means allow all,
 // which is what you want locally.
-app.use(cors({ origin: config.clientOrigin || true }));
+app.use(cors({ origin: config.clientOrigins.length ? config.clientOrigins : true }));
 app.use(express.json({ limit: '1mb' }));
 
 app.get('/api/health', (req, res) =>

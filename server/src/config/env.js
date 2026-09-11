@@ -18,9 +18,15 @@ export const config = {
     // Security, so only scripts use it — never a request path.
     secretKey: process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '',
   },
-  // Deployed client origin, e.g. https://ai-npc-generator.vercel.app
-  // Unset allows any origin — fine locally, not in production.
-  clientOrigin: process.env.CLIENT_ORIGIN || '',
+  // Deployed client origin(s), comma-separated, e.g.
+  //   https://talk-to-fiction-client.vercel.app,http://localhost:5173
+  // Browsers send an Origin with no trailing slash and CORS compares exactly,
+  // so trailing slashes are stripped here. Unset allows any origin — fine
+  // locally, not in production.
+  clientOrigins: (process.env.CLIENT_ORIGIN || '')
+    .split(',')
+    .map((origin) => origin.trim().replace(/\/+$/, ''))
+    .filter(Boolean),
   ai: {
     apiKey: process.env.AI_API_KEY || process.env.GEMINI_API_KEY || '',
     // Dialogue model. This is the one that has to hold a character together.

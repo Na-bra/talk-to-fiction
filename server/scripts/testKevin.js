@@ -21,7 +21,8 @@ const SESSIONLESS = { persistSession: false, autoRefreshToken: false, detectSess
 
 async function makeUser(admin, label) {
   const email = `npc-test-${label}-${Date.now()}@example.com`;
-  const password = `pw-${crypto.randomUUID()}`;
+  // Meets a strict password policy: upper, lower, digit and symbol.
+  const password = `Pw!${crypto.randomUUID()}A1`;
   const created = await admin.auth.admin.createUser({ email, password, email_confirm: true });
   if (created.error) throw new Error(`Could not create test user: ${created.error.message}`);
   const client = createClient(config.supabase.url, config.supabase.publishableKey, { auth: SESSIONLESS });
