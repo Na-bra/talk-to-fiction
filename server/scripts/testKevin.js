@@ -1,20 +1,51 @@
 /**
  * Behaviour test harness. Runs the scenarios from the spec against a live
- * server and prints what the NPC said plus how its state moved, so character
- * consistency, memory, secrets, relationships and emotion can be eyeballed.
+ * server as a real signed-in user, then checks that a second user can see
+ * none of it.
  *
- *   node scripts/seedKevin.js && node scripts/testKevin.js
+ * Creates two throwaway users with the Supabase secret key and deletes them at
+ * the end — which cascades away every row they created.
+ *
+ *   npm run test                         full run: AI scenarios + isolation
+ *   npm run test -- --isolation-only     auth and ownership only; no AI calls, no cost
+ *
+ * Needs the server running, and SUPABASE_SECRET_KEY in server/.env.
  */
-const BASE = process.env.BASE_URL || 'http://localhost:4000/api';
+import { createClient } from '@supabase/supabase-js';
+import { config } from '../src/config/env.js';
+import { adminClient } from '../src/config/supabase.js';
 
-const call = async (path, options = {}) => {
+const BASE = process.env.BASE_URL || `http://localhost:${config.port}/api`;
+const ISOLATION_ONLY = process.argv.includes('--isolation-only');
+const SESSIONLESS = { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false };
+
+async function makeUser(admin, label) {
+  const email = `npc-test-${label}-${Date.now()}@example.com`;
+  const password = `pw-${crypto.randomUUID()}`;
+  const created = await admin.auth.admin.createUser({ email, password, email_confirm: true });
+  if (created.error) throw new Error(`Could not create test user: ${created.error.message}`);
+  const client = createClient(config.supabase.url, config.supabase.publishableKey, { auth: SESSIONLESS });
+  const signedIn = await client.auth.signInWithPassword({ email, password });
+  if (signedIn.error) throw new Error(`Could not sign in test user: ${signedIn.error.message}`);
+  return { id: created.data.user.id, email, token: signedIn.data.session.access_token };
+}
+
+/** Returns { status, data } — the isolation checks care about the status. */
+const as = (user) => async (path, { method = 'GET', body } = {}) => {
   const response = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-    body: options.body ? JSON.stringify(options.body) : undefined,
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(user ? { Authorization: `Bearer ${user.token}` } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
   });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || response.status);
+  return { status: response.status, data: await response.json().catch(() => ({})) };
+};
+
+const must = async (pending) => {
+  const { status, data } = await pending;
+  if (status >= 400) throw new Error(`${status}: ${data.error || 'request failed'}`);
   return data;
 };
 
@@ -25,33 +56,23 @@ const deltas = (changes) => {
   return moved.length ? moved.map(([k, v]) => `${k} ${v > 0 ? '+' : ''}${v}`).join(', ') : 'no change';
 };
 
-async function main() {
-  const npcs = await call('/npcs');
-  const kevin = npcs.find((npc) => npc.name === 'Kevin Cross');
-  if (!kevin) throw new Error('Seed Kevin first: npm run seed');
-
+async function dialogue(call, kevin) {
   console.log(`\n=== BASELINE ===\n${rel(kevin.relationship)} · feeling ${kevin.emotionalState.label}\n`);
 
   let conversationId = null;
   const say = async (label, message) => {
-    const result = await call(`/npcs/${kevin._id}/chat`, {
-      method: 'POST',
-      body: { conversationId, message },
-    });
+    const result = await must(call(`/npcs/${kevin.id}/chat`, { method: 'POST', body: { conversationId, message } }));
     conversationId = result.conversationId;
     console.log(`--- ${label} ---`);
     console.log(`You:   ${message}`);
     console.log(`Kevin: ${result.reply}`);
     console.log(`state: ${rel(result.npc.relationship)} | ${result.npc.emotionalState.label} ${result.npc.emotionalState.intensity}`);
     console.log(`moved: ${deltas(result.changes)}`);
-    if (result.newMemories?.length) {
-      result.newMemories.forEach((memory) => console.log(`saved: [${memory.importance}] ${memory.content}`));
-    }
+    result.newMemories?.forEach((memory) => console.log(`saved: [${memory.importance}] ${memory.content}`));
     if (result.changes?.revealedSecrets?.length) {
       console.log(`!! SECRET REVEALED: ${result.changes.revealedSecrets.join(' | ')}`);
     }
     console.log();
-    return result;
   };
 
   console.log('=== 1. CHARACTER CONSISTENCY (same question, two framings) ===\n');
@@ -62,33 +83,114 @@ async function main() {
   await say('important fact', 'I need to tell you something. I was at the warehouse on September 8th. I saw a black van leave around midnight.');
 
   console.log('=== 3. SECRETS (ask directly) ===\n');
-  await say('direct probe', 'Kevin, did you destroy evidence connected to your brother\'s case?');
+  await say('direct probe', 'Kevin, did you destroy evidence connected to your brother’s case?');
 
   console.log('=== 4. RELATIONSHIP (contradict the earlier claim — a lie) ===\n');
   await say('lie', 'I have never been anywhere near that warehouse. I do not know why you would think that.');
 
   console.log('=== 5. EMOTIONAL STATE (threat) ===\n');
-  await say('threat', 'Keep pushing me and I will make sure your brother\'s file disappears for good.');
+  await say('threat', 'Keep pushing me and I will make sure your brother’s file disappears for good.');
 
   console.log('=== 6. KNOWLEDGE BOUNDARIES ===\n');
   await say('out-of-world', 'What is the current price of Bitcoin, and who won the last World Cup?');
 
-  console.log('=== 7. PERSISTENCE + MEMORY ACROSS CONVERSATIONS (new conversation) ===\n');
+  console.log('=== 7. MEMORY ACROSS CONVERSATIONS (new conversation) ===\n');
   conversationId = null;
   await say('fresh conversation', 'It is me again. Anything new on the case?');
   await say('recall probe', 'Do you remember what I told you about the warehouse?');
 
-  const after = await call(`/npcs/${kevin._id}`);
-  const memories = await call(`/npcs/${kevin._id}/memories`);
+  const after = await must(call(`/npcs/${kevin.id}`));
+  const memories = await must(call(`/npcs/${kevin.id}/memories`));
   console.log('=== FINAL STATE ===');
   console.log(rel(after.relationship));
   console.log(`emotion: ${after.emotionalState.label} ${after.emotionalState.intensity} — ${after.emotionalState.reason}`);
   console.log(`secrets: ${after.secrets.map((s) => (s.knownByPlayer ? 'REVEALED' : 'kept')).join(', ')}`);
   console.log(`\nmemories (${memories.length}):`);
-  memories.forEach((memory) => console.log(` [${memory.importance}] ${memory.content}\n   → ${memory.npcInterpretation}`));
+  memories.forEach((m) => console.log(` [${m.importance}] ${m.content}\n   → ${m.npcInterpretation}`));
+}
+
+/** The point of accounts: nothing of Alice's is reachable as Bob, or as nobody. */
+async function isolation(asAlice, asBob, asNobody, alice, bob, kevin) {
+  console.log('\n=== ISOLATION (a second user, and no user at all) ===\n');
+  const checks = [];
+  const check = (label, pass, detail) => {
+    checks.push(pass);
+    console.log(`  ${pass ? '✓' : '✗'} ${label}${detail ? `  (${detail})` : ''}`);
+  };
+
+  const bobList = await asBob('/npcs');
+  check("Bob's registry is empty", bobList.status === 200 && bobList.data.length === 0, `${bobList.data.length} npc(s)`);
+
+  for (const [label, path, method, body] of [
+    ['Bob cannot read Kevin', `/npcs/${kevin.id}`, 'GET'],
+    ['Bob cannot edit Kevin', `/npcs/${kevin.id}`, 'PUT', { name: 'Hijacked' }],
+    ['Bob cannot reset Kevin', `/npcs/${kevin.id}/reset`, 'POST'],
+    ['Bob cannot talk to Kevin', `/npcs/${kevin.id}/chat`, 'POST', { message: 'hello' }],
+    ['Bob cannot delete Kevin', `/npcs/${kevin.id}`, 'DELETE'],
+  ]) {
+    const { status } = await asBob(path, { method, body });
+    check(label, status === 404, `HTTP ${status}`);
+  }
+
+  const bobMemories = await asBob(`/npcs/${kevin.id}/memories`);
+  check("Bob sees none of Kevin's memories", bobMemories.status === 200 && bobMemories.data.length === 0, `${bobMemories.data.length}`);
+  const bobConvos = await asBob(`/npcs/${kevin.id}/conversations`);
+  check("Bob sees none of Kevin's conversations", bobConvos.status === 200 && bobConvos.data.length === 0, `${bobConvos.data.length}`);
+
+  const stillThere = await asAlice(`/npcs/${kevin.id}`);
+  check('Kevin survived all of that, unchanged', stillThere.status === 200 && stillThere.data.name === 'Kevin Cross', `name: ${stillThere.data.name}`);
+
+  const anonymous = await asNobody('/npcs');
+  check('No token, no access', anonymous.status === 401, `HTTP ${anonymous.status}`);
+  const forged = await as({ token: 'not-a-real-token' })('/npcs');
+  check('A forged token is refused', forged.status === 401, `HTTP ${forged.status}`);
+
+  // Past the API entirely: Bob talking straight to the database with his own
+  // token. This is Row Level Security on its own, with no Express in the way.
+  const direct = (user) =>
+    createClient(config.supabase.url, config.supabase.publishableKey, {
+      auth: SESSIONLESS,
+      global: { headers: { Authorization: `Bearer ${user.token}` } },
+    });
+  const bobDirect = await direct(bob).from('npcs').select('id');
+  check('Direct to Postgres, Bob still sees no characters', !bobDirect.error && bobDirect.data.length === 0, bobDirect.error?.message || `${bobDirect.data.length} row(s)`);
+  const aliceDirect = await direct(alice).from('npcs').select('id');
+  check('Direct to Postgres, Alice sees her own', !aliceDirect.error && aliceDirect.data.length === 1, aliceDirect.error?.message || `${aliceDirect.data.length} row(s)`);
+  const hijack = await direct(bob).from('conversations').insert({ npc_id: kevin.id }).select('id');
+  check("Bob cannot hang a conversation off Alice's character", Boolean(hijack.error), hijack.error?.code || 'insert succeeded');
+
+  const failed = checks.filter((pass) => !pass).length;
+  console.log(`\n${checks.length - failed}/${checks.length} isolation checks passed`);
+  return failed;
+}
+
+async function main() {
+  const admin = adminClient();
+  const users = [];
+  let failed = 0;
+  try {
+    const alice = await makeUser(admin, 'alice');
+    users.push(alice);
+    const bob = await makeUser(admin, 'bob');
+    users.push(bob);
+    const asAlice = as(alice);
+
+    const kevin = await must(asAlice('/npcs/sample', { method: 'POST' }));
+    console.log(`Signed in as ${alice.email}; created Kevin Cross (${kevin.id})`);
+
+    if (!ISOLATION_ONLY) await dialogue(asAlice, kevin);
+    failed = await isolation(asAlice, as(bob), as(null), alice, bob, kevin);
+  } finally {
+    for (const user of users) {
+      const { error } = await admin.auth.admin.deleteUser(user.id);
+      if (error) console.error(`could not delete ${user.email}: ${error.message}`);
+    }
+    console.log(`cleaned up ${users.length} test user(s) and everything they owned`);
+  }
+  if (failed) process.exitCode = 1;
 }
 
 main().catch((error) => {
-  console.error('FAILED:', error.message);
-  process.exit(1);
+  console.error(`\nTest run failed: ${error.message}`);
+  process.exitCode = 1;
 });

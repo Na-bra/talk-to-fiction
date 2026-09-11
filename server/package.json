@@ -6,16 +6,15 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
-    "seed": "node scripts/seedKevin.js",
     "test": "node scripts/testKevin.js",
     "models": "node scripts/listModels.js"
   },
   "dependencies": {
     "@google/genai": "^2.21.0",
+    "@supabase/supabase-js": "^2.116.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "mongoose": "^9.9.5",
     "swagger-ui-express": "^5.0.1",
     "zod": "^4.5.4"
   },

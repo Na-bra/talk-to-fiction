@@ -1,0 +1,18 @@
+# Runs the API. The database and auth live in Supabase, so there is nothing
+# else to bring up:
+#
+#   docker compose up --build
+
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    env_file:
+      # Supplies the Supabase and Gemini settings. Read from the host at run
+      # time, never copied into the image (see .dockerignore).
+      - path: ./server/.env
+        required: false
+    environment:
+      PORT: "4000"

@@ -1,4 +1,4 @@
-import { Memory } from '../../models/Memory.js';
+import { listMemories, insertMemories } from '../../data/memories.js';
 import { CONTEXT } from '../../constants.js';
 import { generateText } from './client.js';
 import { config } from '../../config/env.js';
@@ -27,8 +27,8 @@ function keywords(text) {
  * all in JS is exact and instant. Swapping in embeddings later means replacing
  * only the body of this function.
  */
-export async function retrieveMemories(npcId, query = '', limit = CONTEXT.MEMORY_LIMIT) {
-  const memories = await Memory.find({ npcId }).sort({ createdAt: -1 }).lean();
+export async function retrieveMemories(db, npcId, query = '', limit = CONTEXT.MEMORY_LIMIT) {
+  const memories = await listMemories(db, npcId); // newest first
   if (memories.length <= limit) return memories.reverse();
 
   const queryWords = keywords(query);
@@ -55,7 +55,7 @@ export async function retrieveMemories(npcId, query = '', limit = CONTEXT.MEMORY
  * Validates memory candidates produced by the reflection call before they are
  * persisted. The model proposes; the backend decides.
  */
-export async function storeMemories(npcId, conversationId, candidates = []) {
+export async function storeMemories(db, npcId, conversationId, candidates = []) {
   const clean = [];
   for (const candidate of candidates.slice(0, CONTEXT.MAX_MEMORIES_PER_TURN)) {
     const content = (candidate?.content || '').toString().trim();
@@ -73,7 +73,7 @@ export async function storeMemories(npcId, conversationId, candidates = []) {
     });
   }
   if (!clean.length) return [];
-  return Memory.insertMany(clean);
+  return insertMemories(db, clean);
 }
 
 /**

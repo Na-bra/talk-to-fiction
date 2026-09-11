@@ -1,0 +1,26 @@
+# Secrets — must never be baked into an image layer.
+# Compose still reads server/.env from the host at runtime via env_file,
+# so the key reaches the container without being stored in the image.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Installed per-platform inside the image instead.
+node_modules
+**/node_modules
+
+# Not needed at runtime.
+.git
+.gitignore
+Dockerfile
+.dockerignore
+docker-compose.yml
+README.md
+*.log
+.DS_Store
+
+# Migrations run in Supabase, not in the container.
+supabase

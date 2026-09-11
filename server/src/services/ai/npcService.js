@@ -5,6 +5,8 @@ import { generateText, generateObject } from './client.js';
 import { buildSystemPrompt, buildCharacterBlock, toModelMessages } from './promptBuilder.js';
 import { retrieveMemories, storeMemories, summariseIfNeeded } from './memoryService.js';
 import { applyReflection } from './relationshipService.js';
+import { saveNpcState } from '../../data/npcs.js';
+import { appendMessage, updateConversation } from '../../data/conversations.js';
 
 /* ------------------------------------------------------------------ *
  * Character generation
@@ -135,8 +137,8 @@ ${npc.name}: ${npcReply}`,
  * Keeping them apart means structured state can never leak into dialogue.
  * The reflection is best-effort — if it fails, the player still gets a reply.
  */
-export async function respond({ npc, conversation, playerMessage }) {
-  const memories = await retrieveMemories(npc._id, playerMessage);
+export async function respond({ db, npc, conversation, playerMessage }) {
+  const memories = await retrieveMemories(db, npc.id, playerMessage);
   const recent = conversation.messages.slice(-CONTEXT.RECENT_MESSAGES);
 
   const reply = await generateText({
@@ -146,16 +148,29 @@ export async function respond({ npc, conversation, playerMessage }) {
     temperature: 0.95, // voice needs some room
   });
 
-  conversation.messages.push({ role: 'user', content: playerMessage });
-  conversation.messages.push({ role: 'npc', content: reply });
+  // Saved as soon as it exists: this is what the player saw, so it has to
+  // survive even if everything after this point fails. Sequential on purpose —
+  // the order of inserts is the order of the transcript.
+  for (const message of [
+    { role: 'user', content: playerMessage },
+    { role: 'npc', content: reply },
+  ]) {
+    conversation.messages.push(await appendMessage(db, conversation.id, message));
+  }
 
   let changes = null;
   let newMemories = [];
   try {
     const reflection = await reflect({ npc, playerMessage, npcReply: reply });
-    changes = applyReflection(npc, reflection);
-    newMemories = await storeMemories(npc._id, conversation._id, reflection.memories);
-    await npc.save();
+    // Applied to a copy and only adopted once saved, so a failed write never
+    // leaves the response describing state the database does not hold.
+    const next = structuredClone(npc);
+    const applied = applyReflection(next, reflection);
+    const stored = await storeMemories(db, npc.id, conversation.id, reflection.memories);
+    await saveNpcState(db, next);
+    Object.assign(npc, next);
+    changes = applied;
+    newMemories = stored;
   } catch (error) {
     console.error('[reflection] skipped:', error.message);
   }
@@ -169,7 +184,11 @@ export async function respond({ npc, conversation, playerMessage }) {
   if (conversation.messages.length === 2) {
     conversation.title = playerMessage.slice(0, 60);
   }
-  await conversation.save();
+  await updateConversation(db, conversation.id, {
+    title: conversation.title,
+    summary: conversation.summary,
+    summarisedUpTo: conversation.summarisedUpTo,
+  });
 
   return { reply, changes, newMemories, usedMemories: memories.length };
 }

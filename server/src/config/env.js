@@ -9,7 +9,15 @@ dotenv.config({ path: path.join(serverRoot, '.env') });
 
 export const config = {
   port: Number(process.env.PORT) || 4000,
-  mongoUri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/ai-npc-generator',
+  supabase: {
+    url: (process.env.SUPABASE_URL || '').replace(/\/$/, ''),
+    // Publishable key ("anon" on older projects). Safe to expose — Row Level
+    // Security is what protects the data, not this key.
+    publishableKey: process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || '',
+    // Secret key ("service_role" on older projects). Bypasses Row Level
+    // Security, so only scripts use it — never a request path.
+    secretKey: process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+  },
   // Deployed client origin, e.g. https://ai-npc-generator.vercel.app
   // Unset allows any origin — fine locally, not in production.
   clientOrigin: process.env.CLIENT_ORIGIN || '',
@@ -25,3 +33,4 @@ export const config = {
 };
 
 export const hasAiKey = () => Boolean(config.ai.apiKey);
+export const hasSupabase = () => Boolean(config.supabase.url && config.supabase.publishableKey);

@@ -6,12 +6,14 @@
     "install": "npm --prefix server install",
     "dev": "npm --prefix server run dev",
     "start": "npm --prefix server start",
-    "seed": "npm --prefix server run seed",
     "test": "npm --prefix server run test",
     "models": "npm --prefix server run models"
   },
   "engines": {
     "node": ">=20"
   },
-  "description": "API for the AI NPC Generator — persistent fictional characters with memory, secrets and relationships."
+  "description": "API for the AI NPC Generator — persistent fictional characters with memory, secrets and relationships.",
+  "dependencies": {
+    "@supabase/server": "^1.6.0"
+  }
 }

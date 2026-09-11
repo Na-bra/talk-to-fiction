@@ -44,21 +44,21 @@ export function applySecretReveals(npc, revealed = []) {
     const secret = npc.secrets?.[index];
     if (!secret || secret.knownByPlayer) continue;
     secret.knownByPlayer = true;
-    secret.revealedAt = new Date();
+    secret.revealedAt = new Date().toISOString();
     flipped.push(secret.content);
   }
   return flipped;
 }
 
-/** Applies a whole reflection payload to the NPC document. Does not save. */
+/** Applies a whole reflection payload to a plain NPC object. Does not persist. */
 export function applyReflection(npc, reflection = {}) {
   const { relationship, applied } = applyRelationshipDelta(
-    npc.relationship?.toObject?.() ?? npc.relationship,
+    npc.relationship,
     reflection.relationshipDelta,
   );
   npc.relationship = relationship;
 
-  const previousEmotion = npc.emotionalState?.toObject?.() ?? npc.emotionalState;
+  const previousEmotion = npc.emotionalState;
   npc.emotionalState = resolveEmotion(reflection.emotion, previousEmotion);
 
   const revealedSecrets = applySecretReveals(npc, reflection.revealedSecrets);
