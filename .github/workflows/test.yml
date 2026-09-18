@@ -1,0 +1,71 @@
+# Runs on every push and pull request: install, syntax-check every file, start
+# the API, and run the isolation tests against Supabase.
+#
+# The isolation tests make no AI calls, so they are free and fast. The full
+# behaviour run (npm test, without --isolation-only) talks to Gemini, costs
+# money and hits per-minute rate limits, so it stays a manual, local check.
+#
+# Needs three repository secrets: SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY and
+# SUPABASE_SECRET_KEY. The tests create two throwaway users and delete them,
+# with everything they made, at the end. GitHub never passes secrets to pull
+# requests from forks; for those the Supabase steps are skipped.
+
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Syntax + isolation tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: server
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      PORT: "4000"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - run: npm ci
+
+      - name: Syntax-check every source file
+        run: find src scripts -name '*.js' -print0 | xargs -0 -n1 node --check
+
+      - name: Start the API
+        if: env.SUPABASE_SECRET_KEY != ''
+        run: |
+          node src/index.js > api.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf localhost:4000/api/health && exit 0
+            sleep 1
+          done
+          echo "API did not start"; cat api.log; exit 1
+
+      - name: Isolation tests (no AI calls)
+        if: env.SUPABASE_SECRET_KEY != ''
+        run: npm test -- --isolation-only
+
+      - name: API log
+        if: always() && env.SUPABASE_SECRET_KEY != ''
+        run: cat api.log 2>/dev/null || true
