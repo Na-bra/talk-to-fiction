@@ -19,9 +19,12 @@ This is the API. The React interface lives in its own repo, at
 ## Setting up Supabase (once)
 
 1. Create a project at [supabase.com](https://supabase.com). The free tier is enough.
-2. Open the **SQL Editor**, paste in [`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql),
-   and run it. That creates four tables — `npcs`, `conversations`, `messages`, `memories` — each
-   with Row Level Security switched on.
+2. Open the **SQL Editor** and run each file in [`supabase/migrations`](supabase/migrations), in order:
+   - `0001_init.sql` creates four tables — `npcs`, `conversations`, `messages`, `memories` — each
+     with Row Level Security switched on.
+   - `0002_portraits.sql` adds a portrait column and a private `portraits` storage bucket.
+
+   Check the project in the browser's address bar before running anything.
 3. From **Project Settings**, copy the Project URL, the publishable key and the secret key into
    `server/.env`. The client needs the same URL and publishable key in its own `.env`.
 4. For local development, consider turning off email confirmation (**Authentication → Sign In /
@@ -62,6 +65,10 @@ SUPABASE_SECRET_KEY=                 # "service_role" on older projects; test ha
 AI_API_KEY=
 AI_MODEL=gemini-3.5-flash-lite       # dialogue
 AI_MODEL_FAST=gemini-3.5-flash-lite  # reflection + summarisation
+
+CLOUDFLARE_ACCOUNT_ID=               # portraits; optional — without them, initials
+CLOUDFLARE_API_TOKEN=
+PORTRAITS_PER_USER_PER_DAY=20
 ```
 
 **The running API never uses the secret key.** It bypasses Row Level Security, so only the test
@@ -101,6 +108,7 @@ Every route needs `Authorization: Bearer <access token>` except the three marked
 | `PUT` | `/api/npcs/:id` | Update |
 | `DELETE` | `/api/npcs/:id` | Delete (cascades conversations, messages, memories) |
 | `POST` | `/api/npcs/:id/reset` | Reset state, memories, conversations (test helper) |
+| `POST` | `/api/npcs/:id/portrait` | Draw (or redraw) a portrait from the character sheet |
 | `GET` | `/api/npcs/:id/memories` | Long-term memories |
 | `GET` | `/api/npcs/:id/conversations` | Conversation list |
 | `POST` | `/api/npcs/:id/conversations` | Start a conversation |
@@ -138,6 +146,28 @@ Two things are **not** private per account:
   server's validation. They can only ever touch their own data, and the database's own check
   constraints (relationship values 0–100, valid emotions and roles) still apply. At worst someone
   cheats at their own game.
+
+## Portraits
+
+`POST /api/npcs/:id/portrait` draws a head-and-shoulders portrait with Cloudflare Workers AI
+(FLUX.1 schnell, about 3–8 seconds) and stores it in Supabase Storage. The prompt is built from the
+name, age, occupation, setting, personality and background — **never the secrets**, because a
+portrait is something the player sees. Drawing again replaces the portrait; deleting the character
+deletes it.
+
+**Portraits are private.** `0002_portraits.sql` creates a private bucket in which each user owns one
+folder, named by their user id. The API uploads and signs links as the signed-in user, so the storage
+policies decide access, exactly as Row Level Security does for the tables. Every character response
+carries `portraitUrl`, a link signed for 24 hours; the storage path itself never leaves the API.
+There is no public URL.
+
+**Cost:** Cloudflare's free allowance is 10,000 neurons a day, about 230 portraits at 512×512. It is
+shared by every account, so each account gets a daily share (`PORTRAITS_PER_USER_PER_DAY`, default
+20). A used-up share or allowance answers 429.
+
+Setup: create a free Cloudflare account, copy the **Account ID**, and create an API token from the
+**Workers AI** template (Workers AI → Use REST API). Put both in `server/.env` — never in
+`.env.example`, which is committed.
 
 ## How it works
 
@@ -223,13 +253,21 @@ no token or a forged one — and the same checks **straight against Postgres** w
 token, which tests Row Level Security with no Express in the way. The process exits non-zero if any
 isolation check fails.
 
+### In CI
+
+`.github/workflows/test.yml` runs on every push and pull request: it installs the API, syntax-checks
+every file, starts the server, and runs `npm test -- --isolation-only` against Supabase. It needs
+three repository secrets — `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY` and `SUPABASE_SECRET_KEY`.
+The full behaviour run stays manual: it costs Gemini money and trips per-minute rate limits if run
+repeatedly.
+
 ## Layout
 
 ```
 server/src/
   config/       env, and the Supabase clients (verifier, per-user, admin)
   middleware/   requireUser — verifies the token, attaches req.user and req.db
-  data/         npcs, conversations, memories — the only files that talk to Postgres
+  data/         npcs, conversations, memories, portraits — the only files that talk to Supabase
   routes/       one router
   controllers/  npcController, chatController, authController
   services/ai/  client (the only file that touches a model SDK), promptBuilder,
@@ -239,6 +277,7 @@ server/src/
   docs/         openapi.js — the API spec behind /api/docs
 supabase/
   migrations/   0001_init.sql — tables, constraints, Row Level Security
+                0002_portraits.sql — portrait column, private storage bucket and its policies
 ```
 
 ## Running it in Docker
@@ -265,7 +304,7 @@ the Dockerfile or its own Node build — the settings below are for the latter.
 |---|---|
 | Build command | `npm install` |
 | Start command | `npm start` |
-| Environment | `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `AI_API_KEY`, `AI_MODEL`, `AI_MODEL_FAST`, `CLIENT_ORIGIN` |
+| Environment | `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `AI_API_KEY`, `AI_MODEL`, `AI_MODEL_FAST`, `CLIENT_ORIGIN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` |
 
 Leave `SUPABASE_SECRET_KEY` off the deployed service — nothing there needs it.
 
@@ -286,6 +325,10 @@ current limits before relying on it.
 
 - **No rate limiting.** Any signed-in user can spend your Gemini budget. Add a per-user limit, or
   keep sign-ups closed, before sharing a deployment widely.
+- The per-account portrait limit is held in memory, so it resets when the server restarts — which
+  free hosting does often. It slows one person down; it does not guarantee the cap.
+- Storage is not part of the database cascade. Deleting a character removes its portrait, but
+  deleting a whole user account in Supabase leaves their portrait folder behind.
 - `/auth/token` signs in on the caller's behalf from this server's IP, so Supabase's per-IP auth
   rate limits apply to everyone using it at once. It exists for Swagger and scripts; the client
   never calls it.
