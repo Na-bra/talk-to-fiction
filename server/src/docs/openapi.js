@@ -120,7 +120,7 @@ export const openapiSpec = {
           200: json({
             type: 'object',
             properties: { ok: { type: 'boolean' }, aiConfigured: { type: 'boolean' } },
-            example: { ok: true, aiConfigured: true, authConfigured: true },
+            example: { ok: true, aiConfigured: true, authConfigured: true, portraitsConfigured: true },
           }),
         },
       },
@@ -215,6 +215,28 @@ export const openapiSpec = {
         responses: {
           200: json({ type: 'object', properties: { ok: { type: 'boolean' } }, example: { ok: true } }),
           404: errors[404],
+        },
+      },
+    },
+
+    '/npcs/{id}/portrait': {
+      post: {
+        tags: ['NPCs'],
+        summary: 'Draw a portrait from the character sheet',
+        description: [
+          'Draws a portrait with Cloudflare Workers AI (FLUX.1 schnell) from the name, age, occupation,',
+          'setting, personality and background — never the secrets — and stores it in the owner’s',
+          'private folder. Calling it again replaces the portrait.',
+          '',
+          'The response carries `portraitUrl`, a signed link valid for 24 hours. Every character',
+          'response carries a fresh one. Each account can draw a limited number per day.',
+        ].join('\n'),
+        parameters: [idParam],
+        responses: {
+          200: json(ref('Npc')),
+          404: errors[404],
+          429: { description: 'This account’s daily limit, or the shared free allowance, is used up.', ...json(ref('Error')) },
+          ...aiErrors,
         },
       },
     },
@@ -327,7 +349,7 @@ export const openapiSpec = {
           error: { type: 'string' },
           code: {
             type: 'string',
-            enum: ['missing_key', 'refused', 'bad_output', 'upstream', 'unauthenticated', 'missing_supabase', 'missing_schema', 'invalid_credentials'],
+            enum: ['missing_key', 'refused', 'bad_output', 'upstream', 'unauthenticated', 'missing_supabase', 'missing_schema', 'invalid_credentials', 'quota'],
             description: 'Present on AI and auth failures.',
           },
         },
@@ -385,6 +407,12 @@ export const openapiSpec = {
           secrets: { type: 'array', items: ref('Secret') },
           relationship: ref('Relationship'),
           emotionalState: ref('EmotionalState'),
+          portraitUrl: {
+            type: 'string',
+            format: 'uri',
+            nullable: true,
+            description: 'Signed link to the portrait, valid for 24 hours. Null until one is drawn.',
+          },
           createdAt: { type: 'string', format: 'date-time' },
           updatedAt: { type: 'string', format: 'date-time' },
         },

@@ -35,6 +35,7 @@ router.get('/npcs/:id', wrap(npcs.getOne));
 router.put('/npcs/:id', wrap(npcs.update));
 router.delete('/npcs/:id', wrap(npcs.remove));
 router.post('/npcs/:id/reset', wrap(npcs.reset));
+router.post('/npcs/:id/portrait', wrap(npcs.portrait));
 
 router.get('/npcs/:id/memories', wrap(npcs.memories));
 router.get('/npcs/:id/conversations', wrap(chat.listConversations));

@@ -36,7 +36,16 @@ export const config = {
     // does them fine at a fraction of the cost.
     fastModel: process.env.AI_MODEL_FAST || 'gemini-3.5-flash-lite',
   },
+  // Character portraits, drawn by Cloudflare Workers AI. Its free daily
+  // allowance covers a few hundred portraits and is shared by every account.
+  image: {
+    accountId: process.env.CLOUDFLARE_ACCOUNT_ID || '',
+    apiToken: process.env.CLOUDFLARE_API_TOKEN || '',
+    model: process.env.IMAGE_MODEL || '@cf/black-forest-labs/flux-1-schnell',
+    dailyLimitPerUser: Number(process.env.PORTRAITS_PER_USER_PER_DAY) || 20,
+  },
 };
 
 export const hasAiKey = () => Boolean(config.ai.apiKey);
 export const hasSupabase = () => Boolean(config.supabase.url && config.supabase.publishableKey);
+export const hasImageKey = () => Boolean(config.image.accountId && config.image.apiToken);

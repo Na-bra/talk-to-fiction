@@ -110,6 +110,27 @@ async function dialogue(call, kevin) {
   memories.forEach((m) => console.log(` [${m.importance}] ${m.content}\n   → ${m.npcInterpretation}`));
 }
 
+/** Draws Kevin once and loads the stored image through its signed link. */
+async function portraitCheck(call, kevin) {
+  console.log('\n=== PORTRAIT ===');
+  const health = await must(call('/health'));
+  if (!health.portraitsConfigured) {
+    console.log('  skipped — CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_API_TOKEN not set');
+    return;
+  }
+  const started = Date.now();
+  const { status, data } = await call(`/npcs/${kevin.id}/portrait`, { method: 'POST' });
+  if (status !== 200) {
+    console.log(`  ✗ portrait failed: HTTP ${status} ${data.error}`);
+    return;
+  }
+  const image = await fetch(data.portraitUrl);
+  const bytes = (await image.arrayBuffer()).byteLength;
+  console.log(`  ✓ drawn in ${((Date.now() - started) / 1000).toFixed(1)}s and served by its signed link: HTTP ${image.status} ${image.headers.get('content-type')}, ${Math.round(bytes / 1024)} KB`);
+  const listed = await must(call('/npcs'));
+  console.log(`  ${listed.find((npc) => npc.id === kevin.id)?.portraitUrl ? '✓' : '✗'} the character list carries the portrait link`);
+}
+
 /** The point of accounts: nothing of Alice's is reachable as Bob, or as nobody. */
 async function isolation(asAlice, asBob, asNobody, alice, bob, kevin) {
   console.log('\n=== ISOLATION (a second user, and no user at all) ===\n');
@@ -127,6 +148,7 @@ async function isolation(asAlice, asBob, asNobody, alice, bob, kevin) {
     ['Bob cannot edit Kevin', `/npcs/${kevin.id}`, 'PUT', { name: 'Hijacked' }],
     ['Bob cannot reset Kevin', `/npcs/${kevin.id}/reset`, 'POST'],
     ['Bob cannot talk to Kevin', `/npcs/${kevin.id}/chat`, 'POST', { message: 'hello' }],
+    ['Bob cannot draw Kevin’s portrait', `/npcs/${kevin.id}/portrait`, 'POST'],
     ['Bob cannot delete Kevin', `/npcs/${kevin.id}`, 'DELETE'],
   ]) {
     const { status } = await asBob(path, { method, body });
@@ -160,6 +182,23 @@ async function isolation(asAlice, asBob, asNobody, alice, bob, kevin) {
   const hijack = await direct(bob).from('conversations').insert({ npc_id: kevin.id }).select('id');
   check("Bob cannot hang a conversation off Alice's character", Boolean(hijack.error), hijack.error?.code || 'insert succeeded');
 
+  // Portrait storage, straight against Supabase Storage with each user's own
+  // token — the storage policies on their own, with no Express in the way.
+  const probe = `${alice.id}/probe`;
+  const aliceUpload = await direct(alice).storage.from('portraits').upload(probe, Buffer.from('probe'), { contentType: 'image/png', upsert: true });
+  if (aliceUpload.error) {
+    console.log(`  - storage checks skipped: ${aliceUpload.error.message} (has 0002_portraits.sql been run?)`);
+  } else {
+    const bobSign = await direct(bob).storage.from('portraits').createSignedUrl(probe, 60);
+    check("Bob cannot get a link to Alice's portrait", Boolean(bobSign.error) || !bobSign.data?.signedUrl, bobSign.error?.message || 'link issued');
+    const bobList = await direct(bob).storage.from('portraits').list(alice.id);
+    check("Bob sees nothing in Alice's portrait folder", !bobList.error && bobList.data.length === 0, bobList.error?.message || `${bobList.data.length} file(s)`);
+    const bobWrite = await direct(bob).storage.from('portraits').upload(`${alice.id}/intruder`, Buffer.from('x'), { contentType: 'image/png' });
+    check("Bob cannot put files in Alice's portrait folder", Boolean(bobWrite.error), bobWrite.error?.message || 'upload succeeded');
+    const aliceSign = await direct(alice).storage.from('portraits').createSignedUrl(probe, 60);
+    check('Alice can get a link to her own portrait', !aliceSign.error && Boolean(aliceSign.data?.signedUrl), aliceSign.error?.message || 'ok');
+  }
+
   const failed = checks.filter((pass) => !pass).length;
   console.log(`\n${checks.length - failed}/${checks.length} isolation checks passed`);
   return failed;
@@ -179,10 +218,16 @@ async function main() {
     const kevin = await must(asAlice('/npcs/sample', { method: 'POST' }));
     console.log(`Signed in as ${alice.email}; created Kevin Cross (${kevin.id})`);
 
-    if (!ISOLATION_ONLY) await dialogue(asAlice, kevin);
+    if (!ISOLATION_ONLY) {
+      await dialogue(asAlice, kevin);
+      await portraitCheck(asAlice, kevin);
+    }
     failed = await isolation(asAlice, as(bob), as(null), alice, bob, kevin);
   } finally {
     for (const user of users) {
+      // Storage is not removed with the user, so their portrait folder goes first.
+      const files = await admin.storage.from('portraits').list(user.id);
+      if (files.data?.length) await admin.storage.from('portraits').remove(files.data.map((file) => `${user.id}/${file.name}`));
       const { error } = await admin.auth.admin.deleteUser(user.id);
       if (error) console.error(`could not delete ${user.email}: ${error.message}`);
     }

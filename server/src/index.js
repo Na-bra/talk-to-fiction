@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import { config, hasAiKey, hasSupabase } from './config/env.js';
+import { config, hasAiKey, hasSupabase, hasImageKey } from './config/env.js';
 import swaggerUi from 'swagger-ui-express';
 import routes from './routes/index.js';
 import { openapiSpec } from './docs/openapi.js';
@@ -15,7 +15,12 @@ app.use(cors({ origin: config.clientOrigins.length ? config.clientOrigins : true
 app.use(express.json({ limit: '1mb' }));
 
 app.get('/api/health', (req, res) =>
-  res.json({ ok: true, aiConfigured: hasAiKey(), authConfigured: hasSupabase() }),
+  res.json({
+    ok: true,
+    aiConfigured: hasAiKey(),
+    authConfigured: hasSupabase(),
+    portraitsConfigured: hasImageKey(),
+  }),
 );
 
 // Interactive API docs. The raw spec is served too, for Postman/Insomnia import.
@@ -36,16 +41,17 @@ app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 // AI failures get their own status codes so the UI can explain what went wrong.
 app.use((error, req, res, next) => {
   if (error instanceof AiError) {
-    const status = error.code === 'missing_key' ? 503 : error.code === 'refused' ? 422 : 502;
+    const status = { missing_key: 503, refused: 422, quota: 429 }[error.code] ?? 502;
     return res.status(status).json({ error: error.message, code: error.code });
   }
   if (error instanceof DbError) {
     // 22xxx bad value, 23xxx constraint rejected the data: the request's fault.
     if (/^2[23]/.test(error.code || '')) return res.status(400).json({ error: error.message });
-    // PostgREST cannot find a table: the migration has not been run yet.
-    if (error.code === 'PGRST205') {
+    // A table, column or storage bucket this version needs does not exist: a
+    // migration has not been run yet.
+    if (['PGRST205', 'PGRST204', '42703'].includes(error.code) || /bucket not found/i.test(error.message)) {
       return res.status(503).json({
-        error: 'The database tables do not exist yet. Run supabase/migrations/0001_init.sql in the Supabase SQL Editor.',
+        error: 'The database is missing something this version needs. Run each file in supabase/migrations, in order, in the Supabase SQL Editor.',
         code: 'missing_schema',
       });
     }

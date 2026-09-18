@@ -11,6 +11,9 @@ import {
   DEFAULT_EMOTION,
 } from '../constants.js';
 import { KEVIN_CROSS } from '../samples.js';
+import { config } from '../config/env.js';
+import { portraitPath, uploadPortrait, removePortrait, withPortraitUrls } from '../data/portraits.js';
+import { generatePortrait, portraitsLeftToday, recordPortrait } from '../services/ai/portraitService.js';
 
 const TEXT_FIELDS = [
   'name', 'occupation', 'setting', 'background',
@@ -68,24 +71,24 @@ function pickNpcFields(body = {}, existingSecrets) {
 export const options = (req, res) => res.json({ emotions: EMOTIONS, traits: SUGGESTED_TRAITS });
 
 export async function list(req, res) {
-  res.json(await listNpcs(req.db));
+  res.json(await withPortraitUrls(req.db, await listNpcs(req.db)));
 }
 
 export async function getOne(req, res) {
   const npc = await getNpc(req.db, req.params.id);
   if (!npc) return res.status(404).json({ error: 'NPC not found' });
-  res.json(npc);
+  res.json(await withPortraitUrls(req.db, npc));
 }
 
 export async function create(req, res) {
   const data = pickNpcFields(req.body);
   if (!data.name) return res.status(400).json({ error: 'A name is required' });
-  res.status(201).json(await createNpc(req.db, data));
+  res.status(201).json(await withPortraitUrls(req.db, await createNpc(req.db, data)));
 }
 
 /** Adds a fresh copy of Kevin Cross to the caller's registry. */
 export async function createSample(req, res) {
-  res.status(201).json(await createNpc(req.db, pickNpcFields(KEVIN_CROSS)));
+  res.status(201).json(await withPortraitUrls(req.db, await createNpc(req.db, pickNpcFields(KEVIN_CROSS))));
 }
 
 export async function update(req, res) {
@@ -93,12 +96,19 @@ export async function update(req, res) {
   if (!existing) return res.status(404).json({ error: 'NPC not found' });
   const data = pickNpcFields(req.body, existing.secrets);
   if ('name' in data && !data.name) return res.status(400).json({ error: 'A name is required' });
-  res.json(await updateNpc(req.db, existing.id, data));
+  res.json(await withPortraitUrls(req.db, await updateNpc(req.db, existing.id, data)));
 }
 
 export async function remove(req, res) {
-  const deleted = await deleteNpc(req.db, req.params.id);
-  if (!deleted) return res.status(404).json({ error: 'NPC not found' });
+  const npc = await getNpc(req.db, req.params.id);
+  if (!npc) return res.status(404).json({ error: 'NPC not found' });
+  // Storage is not part of the database cascade, so the portrait goes first.
+  if (npc.portraitPath) {
+    await removePortrait(req.db, npc.portraitPath).catch((error) =>
+      console.error('[portrait] not removed:', error.message),
+    );
+  }
+  await deleteNpc(req.db, npc.id);
   res.json({ ok: true });
 }
 
@@ -126,5 +136,26 @@ export async function reset(req, res) {
     emotionalState: { ...DEFAULT_EMOTION, reason: '' },
     secrets: npc.secrets.map((secret) => ({ ...secret, knownByPlayer: false, revealedAt: null })),
   });
-  res.json(updated);
+  res.json(await withPortraitUrls(req.db, updated));
+}
+
+/**
+ * Draws a portrait from the character sheet and stores it in the owner's
+ * private folder, replacing any earlier one.
+ */
+export async function portrait(req, res) {
+  const npc = await getNpc(req.db, req.params.id);
+  if (!npc) return res.status(404).json({ error: 'NPC not found' });
+  if (portraitsLeftToday(req.user.id) <= 0) {
+    return res.status(429).json({
+      error: `You have drawn today’s ${config.image.dailyLimitPerUser} portraits. More tomorrow.`,
+      code: 'quota',
+    });
+  }
+  const { bytes, contentType } = await generatePortrait(npc);
+  const path = portraitPath(req.user.id, npc.id);
+  await uploadPortrait(req.db, path, bytes, contentType);
+  const updated = await updateNpc(req.db, npc.id, { portraitPath: path });
+  recordPortrait(req.user.id);
+  res.json(await withPortraitUrls(req.db, updated));
 }

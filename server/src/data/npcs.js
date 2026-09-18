@@ -2,7 +2,7 @@ import { unwrap } from './db.js';
 
 const COLUMNS =
   'id, name, age, occupation, setting, personality, background, motivations, goals, fears, ' +
-  'core_values, speech_style, secrets, relationship, emotional_state, created_at, updated_at';
+  'core_values, speech_style, secrets, relationship, emotional_state, portrait_path, created_at, updated_at';
 
 // Postgres columns are snake_case; the API has always spoken camelCase. The
 // mapping lives here, so nothing above the data layer sees a column name.
@@ -21,6 +21,7 @@ const FIELD_TO_COLUMN = {
   secrets: 'secrets',
   relationship: 'relationship',
   emotionalState: 'emotional_state',
+  portraitPath: 'portrait_path',
 };
 
 function toNpc(row) {
@@ -41,6 +42,8 @@ function toNpc(row) {
     secrets: row.secrets ?? [],
     relationship: row.relationship,
     emotionalState: row.emotional_state,
+    // Internal: controllers swap this for a signed portraitUrl before responding.
+    portraitPath: row.portrait_path ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
