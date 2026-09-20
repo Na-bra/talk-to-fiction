@@ -263,7 +263,17 @@ npm run test -- --isolation-only    # auth and ownership only — no AI calls, n
 ```
 
 Needs the server running and `SUPABASE_SECRET_KEY` set. The harness creates two throwaway users,
-runs everything, and deletes them at the end, which cascades away every row they created.
+runs everything, and deletes them at the end, which cascades away every row they created. It also
+sweeps any throwaway account an earlier crashed run left behind — only ones older than an hour, and
+only addresses of the form `npc-<label>-<id>@example.com`, which a real account never matches.
+
+**Keep the tests off the database that serves real people.** Set `PRODUCTION_SUPABASE_URL` to the
+production project and the harness refuses to run whenever `SUPABASE_URL` matches it, exiting 2.
+`--yes-production` overrides it deliberately. Leave it empty while there is only one project.
+
+The plan is a second Supabase project for development and CI, with production used only by Render
+and Vercel. Supabase's free plan allows two active projects per organisation and unlimited paused
+ones, so a spare slot may need a project paused first.
 
 The full run walks the matrix from the spec as the first user — consistency, memory across
 conversations, secret-keeping under direct questioning, relationship movement after a lie,

@@ -10,17 +10,63 @@
  *   npm run test -- --isolation-only     auth and ownership only; no AI calls, no cost
  *
  * Needs the server running, and SUPABASE_SECRET_KEY in server/.env.
+ *
+ * Refuses to run against the project named in PRODUCTION_SUPABASE_URL: these
+ * tests create and delete real users, which is not something to do to a
+ * database serving real people. Pass --yes-production to override.
  */
 import { createClient } from '@supabase/supabase-js';
 import { config } from '../src/config/env.js';
 import { adminClient } from '../src/config/supabase.js';
 
 const BASE = process.env.BASE_URL || `http://localhost:${config.port}/api`;
+
+// Throwaway accounts all look like this, which is what makes sweeping them
+// safe: a real account never matches.
+const TEST_EMAIL = /^npc-[a-z]+-[a-z0-9-]+@example\.com$/;
+const testEmail = (label) => `npc-${label}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}@example.com`;
+
+/** Stops a test run from touching the database that serves real people. */
+function refuseProduction() {
+  const production = (process.env.PRODUCTION_SUPABASE_URL || '').replace(/\/$/, '');
+  if (!production || production !== config.supabase.url) return;
+  if (process.argv.includes('--yes-production')) {
+    console.warn(`\n!! running against PRODUCTION (${new URL(production).host}) because --yes-production was passed\n`);
+    return;
+  }
+  console.error(
+    `\nRefusing to run: SUPABASE_URL is the production project (${new URL(production).host}).\n` +
+      'These tests create and delete users. Point server/.env at a development project,\n' +
+      'or pass --yes-production if you really mean it.\n',
+  );
+  process.exit(2);
+}
+
+/**
+ * Deletes throwaway accounts a previous run left behind — a crash between
+ * creating a user and deleting it would otherwise leave one for good. Only
+ * touches accounts older than an hour, so a run happening right now is safe.
+ */
+async function sweepOldTestUsers(admin) {
+  const { data, error } = await admin.auth.admin.listUsers({ perPage: 1000 });
+  if (error) return;
+  const stale = data.users.filter(
+    (user) => TEST_EMAIL.test(user.email || '') && Date.now() - new Date(user.created_at) > 3600_000,
+  );
+  for (const user of stale) {
+    const files = await admin.storage.from('portraits').list(user.id);
+    if (files.data?.length) {
+      await admin.storage.from('portraits').remove(files.data.map((file) => `${user.id}/${file.name}`));
+    }
+    await admin.auth.admin.deleteUser(user.id);
+  }
+  if (stale.length) console.log(`swept ${stale.length} leftover test account(s) from an earlier run`);
+}
 const ISOLATION_ONLY = process.argv.includes('--isolation-only');
 const SESSIONLESS = { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false };
 
 async function makeUser(admin, label) {
-  const email = `npc-test-${label}-${Date.now()}@example.com`;
+  const email = testEmail(`test-${label}`);
   // Meets a strict password policy: upper, lower, digit and symbol.
   const password = `Pw!${crypto.randomUUID()}A1`;
   const created = await admin.auth.admin.createUser({ email, password, email_confirm: true });
@@ -231,7 +277,9 @@ async function isolation(asAlice, asBob, asNobody, alice, bob, kevin) {
 }
 
 async function main() {
+  refuseProduction();
   const admin = adminClient();
+  await sweepOldTestUsers(admin);
   const users = [];
   let failed = 0;
   try {
