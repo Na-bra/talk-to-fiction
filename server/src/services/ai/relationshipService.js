@@ -1,4 +1,4 @@
-import { EMOTIONS, RELATIONSHIP_KEYS, CONTEXT } from '../../constants.js';
+import { EMOTIONS, RELATIONSHIP_KEYS, CONTEXT, MODEL_EVENT_KINDS } from '../../constants.js';
 
 const clamp = (value, min = 0, max = 100) => Math.max(min, Math.min(max, value));
 
@@ -70,4 +70,16 @@ export function applyReflection(npc, reflection = {}) {
     emotionChanged: previousEmotion?.label !== npc.emotionalState.label,
     revealedSecrets,
   };
+}
+
+/**
+ * A proposed milestone, or null. The model suggests; this decides. Anything
+ * with an unknown kind or a title too thin to mean something is dropped, which
+ * is also how 'none' turns into no milestone at all.
+ */
+export function resolveMilestone(candidate) {
+  const kind = MODEL_EVENT_KINDS.includes(candidate?.kind) ? candidate.kind : null;
+  const title = (candidate?.title || '').toString().trim().replace(/\s+/g, ' ').slice(0, 160);
+  if (!kind || title.length < 6) return null;
+  return { kind, title, detail: (candidate?.detail || '').toString().trim().slice(0, 300) };
 }

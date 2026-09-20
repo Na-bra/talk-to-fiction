@@ -23,6 +23,7 @@ This is the API. The React interface lives in its own repo, at
    - `0001_init.sql` creates four tables — `npcs`, `conversations`, `messages`, `memories` — each
      with Row Level Security switched on.
    - `0002_portraits.sql` adds a portrait column and a private `portraits` storage bucket.
+   - `0003_events.sql` adds `npc_events`, the character's history with you.
 
    Check the project in the browser's address bar before running anything.
 3. From **Project Settings**, copy the Project URL, the publishable key and the secret key into
@@ -110,6 +111,7 @@ Every route needs `Authorization: Bearer <access token>` except the three marked
 | `POST` | `/api/npcs/:id/reset` | Reset state, memories, conversations (test helper) |
 | `POST` | `/api/npcs/:id/portrait` | Draw (or redraw) a portrait from the character sheet |
 | `GET` | `/api/npcs/:id/memories` | Long-term memories |
+| `GET` | `/api/npcs/:id/events` | The character's history: milestones, changes of standing, secrets let slip |
 | `GET` | `/api/npcs/:id/conversations` | Conversation list |
 | `POST` | `/api/npcs/:id/conversations` | Start a conversation |
 | `GET` | `/api/npcs/:id/conversations/:conversationId` | Full transcript |
@@ -216,6 +218,26 @@ never produces a response describing state the database does not hold. Gemini's 
 decoding is not trusted on its own: the JSON is re-parsed and validated against the same Zod schema
 before anything touches the database.
 
+### Standing
+
+The four axes are the machinery; **standing** is what the character acts on. `stages.js` turns them
+into one of Stranger, Acquaintance, Friendly, Close, Trusted or Deep Bond — warmth (trust and
+friendship) carried, wariness (suspicion and fear) subtracted — and the prompt states it plainly
+along with what someone at that stage will and will not discuss. It is derived on every read and
+never stored, so it cannot disagree with the numbers behind it. The numeric lines stay in the
+prompt too: a character who likes you *and* suspects you reads differently from a neutral one.
+
+Standing is why the same question gets a different answer from a stranger and from someone who
+trusts you — and it can fall as well as rise.
+
+### History
+
+`npc_events` is the character's history with you: meeting, changes of standing, secrets let slip,
+and milestones — a promise, a real disagreement, a meaningful favour. The backend decides all of
+them from what happened; only the milestone is proposed by the model, capped at one per turn and
+dropped unless it is convincing. Writing history is best-effort: if it fails, the conversation is
+unaffected.
+
 ### Relationships and emotion
 
 The model proposes; the backend decides. In `services/ai/relationshipService.js`:
@@ -235,6 +257,7 @@ by id, or by its unchanged text — keeps its revealed state. New secrets always
 ## Testing NPC behaviour
 
 ```bash
+npm run test:units                  # state rules only: no network, no database, no cost
 npm run test                        # full run: AI scenarios + isolation checks
 npm run test -- --isolation-only    # auth and ownership only — no AI calls, no cost
 ```

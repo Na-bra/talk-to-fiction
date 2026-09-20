@@ -4,7 +4,9 @@ import { config } from '../../config/env.js';
 import { generateText, generateObject } from './client.js';
 import { buildSystemPrompt, buildCharacterBlock, toModelMessages } from './promptBuilder.js';
 import { retrieveMemories, storeMemories, summariseIfNeeded } from './memoryService.js';
-import { applyReflection } from './relationshipService.js';
+import { applyReflection, resolveMilestone } from './relationshipService.js';
+import { stageFor } from '../../stages.js';
+import { recordEvents } from '../../data/events.js';
 import { saveNpcState } from '../../data/npcs.js';
 import { appendMessage, updateConversation } from '../../data/conversations.js';
 
@@ -87,6 +89,13 @@ const ReflectionSchema = z.object({
     reason: z.string(),
   }),
   revealedSecrets: z.array(z.number()),
+  // 'none' rather than null: one flat shape is easier for the model to hit
+  // than an optional object, and the backend drops anything unconvincing.
+  milestone: z.object({
+    kind: z.enum(['none', 'promise', 'disagreement', 'favour', 'milestone']),
+    title: z.string(),
+    detail: z.string(),
+  }),
 });
 
 const REFLECTION_SYSTEM = `You are the state-tracking layer of a character simulation. You are given a character, their current state, and the exchange that just happened. Report what changed. You are not speaking as the character and you never write dialogue.
@@ -97,7 +106,9 @@ relationshipDelta: whole numbers from -20 to 20, usually between -10 and 10. Ret
 
 emotion: what the character feels at the end of this exchange, with an intensity from 0 to 100 and a one-line reason.
 
-revealedSecrets: the numbers of any listed secrets the character actually disclosed in this reply. Empty unless the reply genuinely gives one away. Hinting, deflecting or lying about a secret is not revealing it.`;
+revealedSecrets: the numbers of any listed secrets the character actually disclosed in this reply. Empty unless the reply genuinely gives one away. Hinting, deflecting or lying about a secret is not revealing it.
+
+milestone: a moment either of them would still remember in a month — a promise made, a real disagreement, a meaningful favour asked or given, or a turning point between them. Use kind "none" for ordinary conversation, which is most of the time. The title is one short line in the past tense, addressed to no one: "Promised to look into the warehouse".`;
 
 async function reflect({ npc, playerMessage, npcReply }) {
   const secretList = npc.secrets?.length
@@ -160,6 +171,8 @@ export async function respond({ db, npc, conversation, playerMessage }) {
 
   let changes = null;
   let newMemories = [];
+  let events = [];
+  const stageBefore = stageFor(npc.relationship);
   try {
     const reflection = await reflect({ npc, playerMessage, npcReply: reply });
     // Applied to a copy and only adopted once saved, so a failed write never
@@ -171,6 +184,42 @@ export async function respond({ db, npc, conversation, playerMessage }) {
     Object.assign(npc, next);
     changes = applied;
     newMemories = stored;
+
+    // The character's history. Everything here is decided from what actually
+    // happened this turn; only the milestone comes from the model, and it is
+    // validated first. Writing it is best-effort — see data/events.js.
+    const stageAfter = stageFor(npc.relationship);
+    const history = [];
+    if (conversation.messages.length === 2) {
+      history.push({ kind: 'met', title: `You met ${npc.name}` });
+    }
+    if (stageAfter.name !== stageBefore.name) {
+      history.push({
+        kind: 'stage_change',
+        title: `${npc.name} now sees you as ${stageAfter.name.toLowerCase()}`,
+        detail: `${stageBefore.name} → ${stageAfter.name}`,
+        meta: { from: stageBefore.name, to: stageAfter.name, score: stageAfter.score },
+      });
+    }
+    for (const secret of (applied.revealedSecrets || []).slice(0, 2)) {
+      history.push({
+        kind: 'secret_revealed',
+        title: `${npc.name} let something slip`,
+        detail: secret,
+      });
+    }
+    const milestone = resolveMilestone(reflection.milestone);
+    if (milestone) history.push(milestone);
+
+    events = await recordEvents(
+      db,
+      history.map((entry) => ({ ...entry, npcId: npc.id, conversationId: conversation.id })),
+    );
+    changes.stage = {
+      from: stageBefore.name,
+      to: stageAfter.name,
+      changed: stageAfter.name !== stageBefore.name,
+    };
   } catch (error) {
     console.error('[reflection] skipped:', error.message);
   }
@@ -190,5 +239,5 @@ export async function respond({ db, npc, conversation, playerMessage }) {
     summarisedUpTo: conversation.summarisedUpTo,
   });
 
-  return { reply, changes, newMemories, usedMemories: memories.length };
+  return { reply, changes, newMemories, events, usedMemories: memories.length };
 }
