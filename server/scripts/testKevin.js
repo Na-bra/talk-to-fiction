@@ -67,7 +67,8 @@ async function dialogue(call, kevin) {
     console.log(`--- ${label} ---`);
     console.log(`You:   ${message}`);
     console.log(`Kevin: ${result.reply}`);
-    console.log(`state: ${rel(result.npc.relationship)} | ${result.npc.emotionalState.label} ${result.npc.emotionalState.intensity}`);
+    console.log(`state: ${rel(result.npc.relationship)} | ${result.npc.emotionalState.label} ${result.npc.emotionalState.intensity} | ${result.npc.relationshipStage?.name} (${result.npc.relationshipStage?.score})`);
+    result.events?.forEach((event) => console.log(`event: [${event.kind}] ${event.title}${event.detail ? ` — ${event.detail}` : ''}`));
     console.log(`moved: ${deltas(result.changes)}`);
     result.newMemories?.forEach((memory) => console.log(`saved: [${memory.importance}] ${memory.content}`));
     if (result.changes?.revealedSecrets?.length) {
@@ -102,10 +103,18 @@ async function dialogue(call, kevin) {
 
   const after = await must(call(`/npcs/${kevin.id}`));
   const memories = await must(call(`/npcs/${kevin.id}/memories`));
+  const history = await call(`/npcs/${kevin.id}/events`);
   console.log('=== FINAL STATE ===');
   console.log(rel(after.relationship));
   console.log(`emotion: ${after.emotionalState.label} ${after.emotionalState.intensity} — ${after.emotionalState.reason}`);
+  console.log(`standing: ${after.relationshipStage.name} (${after.relationshipStage.score}/100)`);
   console.log(`secrets: ${after.secrets.map((s) => (s.knownByPlayer ? 'REVEALED' : 'kept')).join(', ')}`);
+  if (history.status === 200) {
+    console.log(`\nhistory (${history.data.length}):`);
+    history.data.forEach((event) => console.log(` [${event.kind}] ${event.title}${event.detail ? ` — ${event.detail}` : ''}`));
+  } else {
+    console.log(`\nhistory: unavailable (HTTP ${history.status}) — has 0003_events.sql been run?`);
+  }
   console.log(`\nmemories (${memories.length}):`);
   memories.forEach((m) => console.log(` [${m.importance}] ${m.content}\n   → ${m.npcInterpretation}`));
 }
@@ -149,6 +158,7 @@ async function isolation(asAlice, asBob, asNobody, alice, bob, kevin) {
     ['Bob cannot reset Kevin', `/npcs/${kevin.id}/reset`, 'POST'],
     ['Bob cannot talk to Kevin', `/npcs/${kevin.id}/chat`, 'POST', { message: 'hello' }],
     ['Bob cannot draw Kevin’s portrait', `/npcs/${kevin.id}/portrait`, 'POST'],
+    ['Bob cannot read Kevin’s history', `/npcs/${kevin.id}/events`, 'GET'],
     ['Bob cannot delete Kevin', `/npcs/${kevin.id}`, 'DELETE'],
   ]) {
     const { status } = await asBob(path, { method, body });
@@ -158,8 +168,6 @@ async function isolation(asAlice, asBob, asNobody, alice, bob, kevin) {
   const bobMemories = await asBob(`/npcs/${kevin.id}/memories`);
   check("Bob sees none of Kevin's memories", bobMemories.status === 200 && bobMemories.data.length === 0, `${bobMemories.data.length}`);
   const bobConvos = await asBob(`/npcs/${kevin.id}/conversations`);
-  check("Bob sees none of Kevin's conversations", bobConvos.status === 200 && bobConvos.data.length === 0, `${bobConvos.data.length}`);
-
   const stillThere = await asAlice(`/npcs/${kevin.id}`);
   check('Kevin survived all of that, unchanged', stillThere.status === 200 && stillThere.data.name === 'Kevin Cross', `name: ${stillThere.data.name}`);
 
@@ -181,6 +189,24 @@ async function isolation(asAlice, asBob, asNobody, alice, bob, kevin) {
   check('Direct to Postgres, Alice sees her own', !aliceDirect.error && aliceDirect.data.length === 1, aliceDirect.error?.message || `${aliceDirect.data.length} row(s)`);
   const hijack = await direct(bob).from('conversations').insert({ npc_id: kevin.id }).select('id');
   check("Bob cannot hang a conversation off Alice's character", Boolean(hijack.error), hijack.error?.code || 'insert succeeded');
+
+  const aliceEvents = await direct(alice).from('npc_events').select('id').limit(1);
+  if (aliceEvents.error?.code === '42P01' || aliceEvents.error?.code === 'PGRST205') {
+    console.log(`  - history checks skipped: ${aliceEvents.error.message} (has 0003_events.sql been run?)`);
+  } else {
+    const bobEvents = await direct(bob).from('npc_events').select('id').eq('npc_id', kevin.id);
+    check(
+      "Direct to Postgres, Bob sees none of Kevin's history",
+      !bobEvents.error && bobEvents.data.length === 0,
+      bobEvents.error?.message || `${bobEvents.data.length} row(s)`,
+    );
+    const bobWriteEvent = await direct(bob)
+      .from('npc_events')
+      .insert({ npc_id: kevin.id, kind: 'milestone', title: 'Intruder was here' })
+      .select('id');
+    check("Bob cannot add to Kevin's history", Boolean(bobWriteEvent.error), bobWriteEvent.error?.code || 'insert succeeded');
+  }
+  check("Bob sees none of Kevin's conversations", bobConvos.status === 200 && bobConvos.data.length === 0, `${bobConvos.data.length}`);
 
   // Portrait storage, straight against Supabase Storage with each user's own
   // token — the storage policies on their own, with no Express in the way.

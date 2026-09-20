@@ -52,6 +52,10 @@ jobs:
       - name: Syntax-check every source file
         run: find src scripts -name '*.js' -print0 | xargs -0 -n1 node --check
 
+      # No network or database: these run on every pull request, forks included.
+      - name: Unit checks (state rules)
+        run: npm run test:units
+
       - name: Start the API
         if: env.SUPABASE_SECRET_KEY != ''
         run: |

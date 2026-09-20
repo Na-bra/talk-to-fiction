@@ -262,6 +262,20 @@ export const openapiSpec = {
       },
     },
 
+    '/npcs/{id}/events': {
+      get: {
+        tags: ['State'],
+        summary: 'The character\'s history with you',
+        description: [
+          'Milestones, changes of standing and secrets let slip, most recent first. The backend',
+          'decides all of these from what actually happened; only a milestone is proposed by the',
+          'model, and it is validated before it is kept.',
+        ].join('\n'),
+        parameters: [idParam],
+        responses: { 200: json({ type: 'array', items: ref('Event') }), 404: errors[404] },
+      },
+    },
+
     '/npcs/{id}/conversations': {
       get: {
         tags: ['Chat'],
@@ -407,6 +421,15 @@ export const openapiSpec = {
           secrets: { type: 'array', items: ref('Secret') },
           relationship: ref('Relationship'),
           emotionalState: ref('EmotionalState'),
+          relationshipStage: {
+            type: 'object',
+            description: 'Where the character stands with you, derived from the four axes. Never stored.',
+            properties: {
+              name: { type: 'string', example: 'Acquaintance' },
+              score: { type: 'integer', minimum: 0, maximum: 100 },
+              behaviour: { type: 'string', description: 'What someone at this stage will and will not discuss.' },
+            },
+          },
           portraitUrl: {
             type: 'string',
             format: 'uri',
@@ -507,6 +530,30 @@ export const openapiSpec = {
         },
       },
 
+      Event: {
+        type: 'object',
+        description: 'A moment in the character\'s history with you.',
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          npcId: { type: 'string', format: 'uuid' },
+          conversationId: { type: 'string', format: 'uuid', nullable: true },
+          kind: {
+            type: 'string',
+            enum: ['met', 'stage_change', 'secret_revealed', 'promise', 'disagreement', 'favour', 'milestone', 'goal_progress', 'event'],
+          },
+          title: { type: 'string' },
+          detail: { type: 'string' },
+          meta: { type: 'object' },
+          occurredAt: { type: 'string', format: 'date-time' },
+        },
+        example: {
+          kind: 'stage_change',
+          title: 'Kevin Cross now sees you as friendly',
+          detail: 'Acquaintance → Friendly',
+          meta: { from: 'Acquaintance', to: 'Friendly', score: 47 },
+        },
+      },
+
       Memory: {
         type: 'object',
         properties: {
@@ -566,6 +613,15 @@ export const openapiSpec = {
                 example: { trust: -10, friendship: -5, suspicion: 15, fear: 5 },
               },
               emotionChanged: { type: 'boolean' },
+              stage: {
+                type: 'object',
+                description: 'Standing before and after this exchange.',
+                properties: {
+                  from: { type: 'string' },
+                  to: { type: 'string' },
+                  changed: { type: 'boolean' },
+                },
+              },
               revealedSecrets: {
                 type: 'array',
                 items: { type: 'string' },
@@ -574,6 +630,11 @@ export const openapiSpec = {
             },
           },
           newMemories: { type: 'array', items: ref('Memory') },
+          events: {
+            type: 'array',
+            items: ref('Event'),
+            description: 'What this exchange added to the character\'s history. Empty most turns.',
+          },
         },
       },
     },

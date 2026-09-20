@@ -1,4 +1,5 @@
 import { getNpc } from '../data/npcs.js';
+import { stageFor } from '../stages.js';
 import {
   listConversations as listForNpc,
   getConversation as findConversation,
@@ -46,10 +47,12 @@ export async function chat(req, res) {
     reply: result.reply,
     npc: {
       relationship: npc.relationship,
+      relationshipStage: stageFor(npc.relationship),
       emotionalState: npc.emotionalState,
       secrets: npc.secrets,
     },
     changes: result.changes,
     newMemories: result.newMemories,
+    events: result.events,
   });
 }

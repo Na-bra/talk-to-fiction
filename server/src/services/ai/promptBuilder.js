@@ -6,6 +6,8 @@
 // The stable layers come first so the provider's implicit prefix caching has
 // something constant to hit; volatile state follows and never disturbs it.
 
+import { stageFor } from '../../stages.js';
+
 const band = (value, [low, mid, high]) => (value < 34 ? low : value < 67 ? mid : high);
 
 function describeRelationship(relationship) {
@@ -87,6 +89,7 @@ export function buildCharacterBlock(npc) {
 /** Layer 3: state that moves. Kept separate so it never invalidates the cache. */
 export function buildStateBlock({ npc, memories = [], summary = '' }) {
   const emotion = npc.emotionalState || {};
+  const stage = stageFor(npc.relationship || {});
   const memoryLines = memories.length
     ? memories
         .map((memory) => {
@@ -104,6 +107,9 @@ export function buildStateBlock({ npc, memories = [], summary = '' }) {
     '',
     'How you currently regard the person you are speaking to:',
     describeRelationship(npc.relationship || {}),
+    '',
+    `Where you stand with them: ${stage.name}. ${stage.behaviour}`,
+    'That standing decides what you are willing to say about yourself. It can fall as well as rise.',
     '',
     '# WHAT YOU REMEMBER',
     memoryLines,

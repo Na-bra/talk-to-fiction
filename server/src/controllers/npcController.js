@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { listNpcs, getNpc, createNpc, updateNpc, deleteNpc } from '../data/npcs.js';
 import { listMemories, deleteMemoriesForNpc } from '../data/memories.js';
+import { listEvents } from '../data/events.js';
 import { deleteConversationsForNpc } from '../data/conversations.js';
 import { generateCharacterDraft } from '../services/ai/npcService.js';
 import {
@@ -120,6 +121,13 @@ export async function remove(req, res) {
 export async function generate(req, res) {
   const draft = await generateCharacterDraft(pickNpcFields(req.body));
   res.json(draft);
+}
+
+/** The character's history: milestones, stage changes, secrets let slip. */
+export async function events(req, res) {
+  const npc = await getNpc(req.db, req.params.id);
+  if (!npc) return res.status(404).json({ error: 'NPC not found' });
+  res.json(await listEvents(req.db, npc.id));
 }
 
 export async function memories(req, res) {

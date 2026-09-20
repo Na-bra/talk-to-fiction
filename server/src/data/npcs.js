@@ -1,4 +1,5 @@
 import { unwrap } from './db.js';
+import { stageFor } from '../stages.js';
 
 const COLUMNS =
   'id, name, age, occupation, setting, personality, background, motivations, goals, fears, ' +
@@ -42,6 +43,8 @@ function toNpc(row) {
     secrets: row.secrets ?? [],
     relationship: row.relationship,
     emotionalState: row.emotional_state,
+    // Derived, never stored — see stages.js.
+    relationshipStage: stageFor(row.relationship),
     // Internal: controllers swap this for a signed portraitUrl before responding.
     portraitPath: row.portrait_path ?? null,
     createdAt: row.created_at,
