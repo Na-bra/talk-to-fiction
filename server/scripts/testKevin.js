@@ -220,6 +220,16 @@ async function isolation(asAlice, asBob, asNobody, alice, bob, kevin) {
       !bobEvents.error && bobEvents.data.length === 0,
       bobEvents.error?.message || `${bobEvents.data.length} row(s)`,
     );
+    const bobWriteEvent = await direct(bob)
+      .from('npc_events')
+      .insert({ npc_id: kevin.id, kind: 'milestone', title: 'Intruder was here' })
+      .select('id');
+    check("Bob cannot add to Kevin's history", Boolean(bobWriteEvent.error), bobWriteEvent.error?.code || 'insert succeeded');
+  }
+  const aliceGoals = await direct(alice).from('npc_goals').select('id').limit(1);
+  if (aliceGoals.error?.code === '42P01' || aliceGoals.error?.code === 'PGRST205') {
+    console.log(`  - goals checks skipped: ${aliceGoals.error.message} (has 0004_goals.sql been run?)`);
+  } else {
     const bobGoals = await direct(bob).from('npc_goals').select('id').eq('npc_id', kevin.id);
     check(
       "Direct to Postgres, Bob sees none of Kevin's goals",
@@ -231,11 +241,6 @@ async function isolation(asAlice, asBob, asNobody, alice, bob, kevin) {
       .insert({ npc_id: kevin.id, title: 'Serve the intruder' })
       .select('id');
     check("Bob cannot give Kevin a goal", Boolean(bobWriteGoal.error), bobWriteGoal.error?.code || 'insert succeeded');
-    const bobWriteEvent = await direct(bob)
-      .from('npc_events')
-      .insert({ npc_id: kevin.id, kind: 'milestone', title: 'Intruder was here' })
-      .select('id');
-    check("Bob cannot add to Kevin's history", Boolean(bobWriteEvent.error), bobWriteEvent.error?.code || 'insert succeeded');
   }
   check("Bob sees none of Kevin's conversations", bobConvos.status === 200 && bobConvos.data.length === 0, `${bobConvos.data.length}`);
 
