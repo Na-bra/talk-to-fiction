@@ -24,6 +24,7 @@ This is the API. The React interface lives in its own repo, at
      with Row Level Security switched on.
    - `0002_portraits.sql` adds a portrait column and a private `portraits` storage bucket.
    - `0003_events.sql` adds `npc_events`, the character's history with you.
+   - `0004_goals.sql` adds `npc_goals`, what each character is pursuing.
 
    Check the project in the browser's address bar before running anything.
 3. From **Project Settings**, copy the Project URL, the publishable key and the secret key into
@@ -112,6 +113,10 @@ Every route needs `Authorization: Bearer <access token>` except the three marked
 | `POST` | `/api/npcs/:id/portrait` | Draw (or redraw) a portrait from the character sheet |
 | `GET` | `/api/npcs/:id/memories` | Long-term memories |
 | `GET` | `/api/npcs/:id/events` | The character's history: milestones, changes of standing, secrets let slip |
+| `GET` | `/api/npcs/:id/goals` | What the character is pursuing |
+| `POST` | `/api/npcs/:id/goals/plan` | Read the sheet and write down their pursuits |
+| `PUT` | `/api/npcs/:id/goals/:goalId` | Edit a goal, its progress or status |
+| `DELETE` | `/api/npcs/:id/goals/:goalId` | Remove a goal |
 | `GET` | `/api/npcs/:id/conversations` | Conversation list |
 | `POST` | `/api/npcs/:id/conversations` | Start a conversation |
 | `GET` | `/api/npcs/:id/conversations/:conversationId` | Full transcript |
@@ -229,6 +234,19 @@ prompt too: a character who likes you *and* suspects you reads differently from 
 
 Standing is why the same question gets a different answer from a stranger and from someone who
 trusts you — and it can fall as well as rise.
+
+### Goals
+
+The sheet's `goals` field stays as the author's prose. `npc_goals` is the tracked version: one row
+per pursuit, each with the next step, what stands in the way, and progress from 0 to 100.
+`POST /npcs/:id/goals/plan` reads the sheet and writes one to three of them — never from the
+secrets, which are things a character hides rather than chases.
+
+Active goals go into the prompt, so a character asks for what they need and complains about what is
+blocking them. A turn may move **one** goal by at most 15 points, up or down, and reaching 100 marks
+it achieved. Every move is written to the history. As everywhere else, the model proposes and
+`goalService.js` decides: an unknown goal number, a goal that is not active, or an update that
+changes nothing is dropped.
 
 ### History
 

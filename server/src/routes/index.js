@@ -12,7 +12,7 @@ const router = Router();
 
 // A malformed id cannot match any row, so turn it away before Postgres answers
 // with a type error instead of a clean 400.
-for (const name of ['id', 'conversationId']) {
+for (const name of ['id', 'conversationId', 'goalId']) {
   router.param(name, (req, res, next, value) =>
     isUuid(value) ? next() : res.status(400).json({ error: 'Malformed id' }),
   );
@@ -39,6 +39,10 @@ router.post('/npcs/:id/portrait', wrap(npcs.portrait));
 
 router.get('/npcs/:id/memories', wrap(npcs.memories));
 router.get('/npcs/:id/events', wrap(npcs.events));
+router.get('/npcs/:id/goals', wrap(npcs.goals));
+router.post('/npcs/:id/goals/plan', wrap(npcs.planNpcGoals));
+router.put('/npcs/:id/goals/:goalId', wrap(npcs.updateNpcGoal));
+router.delete('/npcs/:id/goals/:goalId', wrap(npcs.removeNpcGoal));
 router.get('/npcs/:id/conversations', wrap(chat.listConversations));
 router.post('/npcs/:id/conversations', wrap(chat.createConversation));
 router.get('/npcs/:id/conversations/:conversationId', wrap(chat.getConversation));

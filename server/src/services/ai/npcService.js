@@ -7,6 +7,8 @@ import { retrieveMemories, storeMemories, summariseIfNeeded } from './memoryServ
 import { applyReflection, resolveMilestone } from './relationshipService.js';
 import { stageFor } from '../../stages.js';
 import { recordEvents } from '../../data/events.js';
+import { activeGoals, updateGoal } from '../../data/goals.js';
+import { resolveGoalUpdate } from './goalService.js';
 import { saveNpcState } from '../../data/npcs.js';
 import { appendMessage, updateConversation } from '../../data/conversations.js';
 
@@ -96,6 +98,13 @@ const ReflectionSchema = z.object({
     title: z.string(),
     detail: z.string(),
   }),
+  // 0 means no goal moved, which is the usual answer.
+  goalUpdate: z.object({
+    goal: z.number(),
+    progressDelta: z.number(),
+    objective: z.string(),
+    note: z.string(),
+  }),
 });
 
 const REFLECTION_SYSTEM = `You are the state-tracking layer of a character simulation. You are given a character, their current state, and the exchange that just happened. Report what changed. You are not speaking as the character and you never write dialogue.
@@ -108,9 +117,11 @@ emotion: what the character feels at the end of this exchange, with an intensity
 
 revealedSecrets: the numbers of any listed secrets the character actually disclosed in this reply. Empty unless the reply genuinely gives one away. Hinting, deflecting or lying about a secret is not revealing it.
 
+goalUpdate: whether this exchange moved one of the character's own pursuits. Use goal 0 for no change, which is the usual answer. A conversation nudges a pursuit — progressDelta is small, and negative when the character lost ground. Set objective only when the next step genuinely changed, and note to say in one line what happened.
+
 milestone: a moment either of them would still remember in a month — a promise made, a real disagreement, a meaningful favour asked or given, or a turning point between them. Use kind "none" for ordinary conversation, which is most of the time. The title is one short line in the past tense, addressed to no one: "Promised to look into the warehouse".`;
 
-async function reflect({ npc, playerMessage, npcReply }) {
+async function reflect({ npc, playerMessage, npcReply, goals = [] }) {
   const secretList = npc.secrets?.length
     ? npc.secrets
         .map((secret, index) => `${index + 1}. ${secret.content} [${secret.knownByPlayer ? 'already known to player' : 'hidden'}]`)
@@ -127,6 +138,9 @@ async function reflect({ npc, playerMessage, npcReply }) {
 
 # SECRETS BY NUMBER
 ${secretList}
+
+# GOALS BY NUMBER
+${goals.length ? goals.map((goal, index) => `${index + 1}. ${goal.title} — ${goal.progress}%. Next: ${goal.currentObjective || 'unset'}. In the way: ${goal.obstacle || 'unset'}`).join('\n') : 'None.'}
 
 # CURRENT STATE
 Emotion: ${npc.emotionalState?.label} (${npc.emotionalState?.intensity}/100)
@@ -150,10 +164,11 @@ ${npc.name}: ${npcReply}`,
  */
 export async function respond({ db, npc, conversation, playerMessage }) {
   const memories = await retrieveMemories(db, npc.id, playerMessage);
+  const goals = await activeGoals(db, npc.id);
   const recent = conversation.messages.slice(-CONTEXT.RECENT_MESSAGES);
 
   const reply = await generateText({
-    system: buildSystemPrompt({ npc, memories, summary: conversation.summary }),
+    system: buildSystemPrompt({ npc, memories, summary: conversation.summary, goals }),
     messages: [...toModelMessages(recent), { role: 'user', content: playerMessage }],
     maxTokens: 1000,
     temperature: 0.95, // voice needs some room
@@ -172,9 +187,10 @@ export async function respond({ db, npc, conversation, playerMessage }) {
   let changes = null;
   let newMemories = [];
   let events = [];
+  let changesGoal = null;
   const stageBefore = stageFor(npc.relationship);
   try {
-    const reflection = await reflect({ npc, playerMessage, npcReply: reply });
+    const reflection = await reflect({ npc, playerMessage, npcReply: reply, goals });
     // Applied to a copy and only adopted once saved, so a failed write never
     // leaves the response describing state the database does not hold.
     const next = structuredClone(npc);
@@ -211,6 +227,32 @@ export async function respond({ db, npc, conversation, playerMessage }) {
     const milestone = resolveMilestone(reflection.milestone);
     if (milestone) history.push(milestone);
 
+    // A pursuit moves at most a little per exchange, and only one at a time.
+    const goalUpdate = resolveGoalUpdate(reflection.goalUpdate, goals);
+    if (goalUpdate) {
+      try {
+        await updateGoal(db, npc.id, goalUpdate.id, {
+          progress: goalUpdate.progress,
+          currentObjective: goalUpdate.currentObjective,
+          status: goalUpdate.achieved ? 'achieved' : 'active',
+        });
+        history.push({
+          kind: 'goal_progress',
+          title: goalUpdate.note || `${goalUpdate.achieved ? 'Achieved' : 'Moved closer'}: ${goalUpdate.title}`,
+          detail: `${goalUpdate.title} — ${goalUpdate.from}% → ${goalUpdate.progress}%`,
+          meta: { goalId: goalUpdate.id, from: goalUpdate.from, to: goalUpdate.progress },
+        });
+        changesGoal = {
+          title: goalUpdate.title,
+          from: goalUpdate.from,
+          to: goalUpdate.progress,
+          achieved: goalUpdate.achieved,
+        };
+      } catch (error) {
+        console.error('[goals] not updated:', error.message);
+      }
+    }
+
     events = await recordEvents(
       db,
       history.map((entry) => ({ ...entry, npcId: npc.id, conversationId: conversation.id })),
@@ -220,6 +262,7 @@ export async function respond({ db, npc, conversation, playerMessage }) {
       to: stageAfter.name,
       changed: stageAfter.name !== stageBefore.name,
     };
+    changes.goal = changesGoal;
   } catch (error) {
     console.error('[reflection] skipped:', error.message);
   }

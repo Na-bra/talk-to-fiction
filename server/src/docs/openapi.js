@@ -276,6 +276,72 @@ export const openapiSpec = {
       },
     },
 
+    '/npcs/{id}/goals': {
+      get: {
+        tags: ['State'],
+        summary: 'What the character is pursuing',
+        description: 'Active goals first, then achieved and abandoned ones.',
+        parameters: [idParam],
+        responses: { 200: json({ type: 'array', items: ref('Goal') }), 404: errors[404] },
+      },
+    },
+
+    '/npcs/{id}/goals/plan': {
+      post: {
+        tags: ['State'],
+        summary: 'Read the sheet and write down what they are pursuing (**AI**)',
+        description: [
+          'Turns the stated goals, motivations and background into one to three tracked pursuits,',
+          'each with a next step and an obstacle. Secrets are never used: those are things a',
+          'character hides, not things they chase.',
+          '',
+          'Only fills the room left, so calling it again cannot bury a character in goals, and it',
+          'never changes ones already there.',
+        ].join('\n'),
+        parameters: [idParam],
+        responses: {
+          201: json({ type: 'array', items: ref('Goal') }),
+          400: { description: 'Already pursuing the maximum number of goals.', ...json(ref('Error')) },
+          404: errors[404],
+          ...aiErrors,
+        },
+      },
+    },
+
+    '/npcs/{id}/goals/{goalId}': {
+      put: {
+        tags: ['State'],
+        summary: 'Edit a goal, its progress or its status',
+        parameters: [idParam, { name: 'goalId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        requestBody: {
+          required: true,
+          ...json(
+            {
+              type: 'object',
+              properties: {
+                title: { type: 'string' },
+                currentObjective: { type: 'string' },
+                obstacle: { type: 'string' },
+                progress: { type: 'integer', minimum: 0, maximum: 100 },
+                status: { type: 'string', enum: ['active', 'achieved', 'abandoned'] },
+              },
+            },
+            { status: 'achieved' },
+          ),
+        },
+        responses: { 200: json(ref('Goal')), 400: errors[400], 404: errors[404] },
+      },
+      delete: {
+        tags: ['State'],
+        summary: 'Remove a goal',
+        parameters: [idParam, { name: 'goalId', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+        responses: {
+          200: json({ type: 'object', properties: { ok: { type: 'boolean' } }, example: { ok: true } }),
+          404: errors[404],
+        },
+      },
+    },
+
     '/npcs/{id}/conversations': {
       get: {
         tags: ['Chat'],
@@ -530,6 +596,29 @@ export const openapiSpec = {
         },
       },
 
+      Goal: {
+        type: 'object',
+        description: 'Something the character is pursuing. Conversations move the progress.',
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          npcId: { type: 'string', format: 'uuid' },
+          title: { type: 'string' },
+          currentObjective: { type: 'string', description: 'The next step they would take.' },
+          obstacle: { type: 'string', description: 'What stands in the way right now.' },
+          progress: { type: 'integer', minimum: 0, maximum: 100 },
+          status: { type: 'string', enum: ['active', 'achieved', 'abandoned'] },
+          createdAt: { type: 'string', format: 'date-time' },
+          updatedAt: { type: 'string', format: 'date-time' },
+        },
+        example: {
+          title: 'Find out what happened to his brother',
+          currentObjective: 'Get the warehouse witness to talk',
+          obstacle: 'The witness refuses to cooperate',
+          progress: 20,
+          status: 'active',
+        },
+      },
+
       Event: {
         type: 'object',
         description: 'A moment in the character\'s history with you.',
@@ -613,6 +702,17 @@ export const openapiSpec = {
                 example: { trust: -10, friendship: -5, suspicion: 15, fear: 5 },
               },
               emotionChanged: { type: 'boolean' },
+              goal: {
+                type: 'object',
+                nullable: true,
+                description: 'The pursuit this exchange moved, if any. Null on most turns.',
+                properties: {
+                  title: { type: 'string' },
+                  from: { type: 'integer' },
+                  to: { type: 'integer' },
+                  achieved: { type: 'boolean' },
+                },
+              },
               stage: {
                 type: 'object',
                 description: 'Standing before and after this exchange.',
