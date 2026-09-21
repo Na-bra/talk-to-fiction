@@ -60,6 +60,15 @@ const deltas = (changes) => {
 async function dialogue(call, kevin) {
   console.log(`\n=== BASELINE ===\n${rel(kevin.relationship)} · feeling ${kevin.emotionalState.label}\n`);
 
+  console.log('=== GOALS (read from his sheet) ===\n');
+  const planned = await call(`/npcs/${kevin.id}/goals/plan`, { method: 'POST' });
+  if (planned.status === 201) {
+    planned.data.forEach((goal) => console.log(`  ${goal.progress}%  ${goal.title}\n        next: ${goal.currentObjective}\n        in the way: ${goal.obstacle}`));
+  } else {
+    console.log(`  unavailable: HTTP ${planned.status} ${planned.data.error || ''}`);
+  }
+  console.log();
+
   let conversationId = null;
   const say = async (label, message) => {
     const result = await must(call(`/npcs/${kevin.id}/chat`, { method: 'POST', body: { conversationId, message } }));
@@ -70,6 +79,10 @@ async function dialogue(call, kevin) {
     console.log(`state: ${rel(result.npc.relationship)} | ${result.npc.emotionalState.label} ${result.npc.emotionalState.intensity} | ${result.npc.relationshipStage?.name} (${result.npc.relationshipStage?.score})`);
     result.events?.forEach((event) => console.log(`event: [${event.kind}] ${event.title}${event.detail ? ` — ${event.detail}` : ''}`));
     console.log(`moved: ${deltas(result.changes)}`);
+    if (result.changes?.goal) {
+      const goal = result.changes.goal;
+      console.log(`goal : ${goal.title} ${goal.from}% → ${goal.to}%${goal.achieved ? ' (achieved)' : ''}`);
+    }
     result.newMemories?.forEach((memory) => console.log(`saved: [${memory.importance}] ${memory.content}`));
     if (result.changes?.revealedSecrets?.length) {
       console.log(`!! SECRET REVEALED: ${result.changes.revealedSecrets.join(' | ')}`);
@@ -104,11 +117,16 @@ async function dialogue(call, kevin) {
   const after = await must(call(`/npcs/${kevin.id}`));
   const memories = await must(call(`/npcs/${kevin.id}/memories`));
   const history = await call(`/npcs/${kevin.id}/events`);
+  const goalsNow = await call(`/npcs/${kevin.id}/goals`);
   console.log('=== FINAL STATE ===');
   console.log(rel(after.relationship));
   console.log(`emotion: ${after.emotionalState.label} ${after.emotionalState.intensity} — ${after.emotionalState.reason}`);
   console.log(`standing: ${after.relationshipStage.name} (${after.relationshipStage.score}/100)`);
   console.log(`secrets: ${after.secrets.map((s) => (s.knownByPlayer ? 'REVEALED' : 'kept')).join(', ')}`);
+  if (goalsNow.status === 200 && goalsNow.data.length) {
+    console.log(`\ngoals (${goalsNow.data.length}):`);
+    goalsNow.data.forEach((goal) => console.log(` [${goal.status}] ${goal.progress}%  ${goal.title} — next: ${goal.currentObjective}`));
+  }
   if (history.status === 200) {
     console.log(`\nhistory (${history.data.length}):`);
     history.data.forEach((event) => console.log(` [${event.kind}] ${event.title}${event.detail ? ` — ${event.detail}` : ''}`));
@@ -159,6 +177,8 @@ async function isolation(asAlice, asBob, asNobody, alice, bob, kevin) {
     ['Bob cannot talk to Kevin', `/npcs/${kevin.id}/chat`, 'POST', { message: 'hello' }],
     ['Bob cannot draw Kevin’s portrait', `/npcs/${kevin.id}/portrait`, 'POST'],
     ['Bob cannot read Kevin’s history', `/npcs/${kevin.id}/events`, 'GET'],
+    ['Bob cannot see Kevin’s goals', `/npcs/${kevin.id}/goals`, 'GET'],
+    ['Bob cannot plan goals for Kevin', `/npcs/${kevin.id}/goals/plan`, 'POST'],
     ['Bob cannot delete Kevin', `/npcs/${kevin.id}`, 'DELETE'],
   ]) {
     const { status } = await asBob(path, { method, body });
@@ -200,6 +220,17 @@ async function isolation(asAlice, asBob, asNobody, alice, bob, kevin) {
       !bobEvents.error && bobEvents.data.length === 0,
       bobEvents.error?.message || `${bobEvents.data.length} row(s)`,
     );
+    const bobGoals = await direct(bob).from('npc_goals').select('id').eq('npc_id', kevin.id);
+    check(
+      "Direct to Postgres, Bob sees none of Kevin's goals",
+      !bobGoals.error && bobGoals.data.length === 0,
+      bobGoals.error?.message || `${bobGoals.data.length} row(s)`,
+    );
+    const bobWriteGoal = await direct(bob)
+      .from('npc_goals')
+      .insert({ npc_id: kevin.id, title: 'Serve the intruder' })
+      .select('id');
+    check("Bob cannot give Kevin a goal", Boolean(bobWriteGoal.error), bobWriteGoal.error?.code || 'insert succeeded');
     const bobWriteEvent = await direct(bob)
       .from('npc_events')
       .insert({ npc_id: kevin.id, kind: 'milestone', title: 'Intruder was here' })

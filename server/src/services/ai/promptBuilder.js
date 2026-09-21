@@ -87,7 +87,7 @@ export function buildCharacterBlock(npc) {
 }
 
 /** Layer 3: state that moves. Kept separate so it never invalidates the cache. */
-export function buildStateBlock({ npc, memories = [], summary = '' }) {
+export function buildStateBlock({ npc, memories = [], summary = '', goals = [] }) {
   const emotion = npc.emotionalState || {};
   const stage = stageFor(npc.relationship || {});
   const memoryLines = memories.length
@@ -111,6 +111,19 @@ export function buildStateBlock({ npc, memories = [], summary = '' }) {
     `Where you stand with them: ${stage.name}. ${stage.behaviour}`,
     'That standing decides what you are willing to say about yourself. It can fall as well as rise.',
     '',
+    goals.length
+      ? [
+          '# WHAT YOU ARE WORKING TOWARD',
+          'Your own pursuits. Bring them up when they fit — ask for what you need, complain about what is in the way, notice when this person could help or hinder you. Do not recite them.',
+          goals
+            .map(
+              (goal, index) =>
+                `${index + 1}. ${goal.title} — ${goal.progress}% of the way there.${goal.currentObjective ? ` Next: ${goal.currentObjective}` : ''}${goal.obstacle ? ` In the way: ${goal.obstacle}` : ''}`,
+            )
+            .join('\n'),
+          '',
+        ].join('\n')
+      : '',
     '# WHAT YOU REMEMBER',
     memoryLines,
     summary ? `\n# EARLIER IN THIS CONVERSATION\n${summary}` : '',
@@ -123,8 +136,8 @@ export function buildStateBlock({ npc, memories = [], summary = '' }) {
  * Full system instruction: the stable character block, then the volatile state
  * block. Order matters — see the note at the top of this file.
  */
-export function buildSystemPrompt({ npc, memories, summary }) {
-  return [buildCharacterBlock(npc), buildStateBlock({ npc, memories, summary })].join(
+export function buildSystemPrompt({ npc, memories, summary, goals }) {
+  return [buildCharacterBlock(npc), buildStateBlock({ npc, memories, summary, goals })].join(
     '\n\n---\n\n',
   );
 }

@@ -85,6 +85,8 @@ export const RELATIONSHIP_STAGES = [
 // by the backend from what actually happened.
 export const MODEL_EVENT_KINDS = ['promise', 'disagreement', 'favour', 'milestone'];
 
+export const GOAL_STATUSES = ['active', 'achieved', 'abandoned'];
+
 // Tuning knobs for the context + reflection systems, kept in one place so the
 // behaviour is easy to reason about and adjust.
 export const CONTEXT = {
@@ -98,4 +100,8 @@ export const CONTEXT = {
   MAX_MEMORIES_PER_TURN: 2,
   MAX_MEMORY_LENGTH: 400,
   MAX_RELATIONSHIP_DELTA: 20,
+  // A conversation nudges a goal; it does not finish one.
+  MAX_GOAL_PROGRESS_DELTA: 15,
+  // Enough to give a character direction without turning them into a to-do list.
+  MAX_ACTIVE_GOALS: 3,
 };

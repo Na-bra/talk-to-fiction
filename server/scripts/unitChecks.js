@@ -12,6 +12,7 @@ import {
   applySecretReveals,
   resolveMilestone,
 } from '../src/services/ai/relationshipService.js';
+import { resolveGoalUpdate } from '../src/services/ai/goalService.js';
 import { DEFAULT_RELATIONSHIP, RELATIONSHIP_STAGES, CONTEXT } from '../src/constants.js';
 
 let failed = 0;
@@ -58,6 +59,23 @@ check('a thin title is dropped', resolveMilestone({ kind: 'promise', title: 'ok'
 check('a real milestone survives', resolveMilestone({ kind: 'promise', title: 'Promised to look into the warehouse' })?.kind === 'promise');
 check('a long title is trimmed', resolveMilestone({ kind: 'favour', title: 'x'.repeat(400) }).title.length === 160);
 check('missing input does not throw', resolveMilestone(undefined) === null && resolveMilestone({}) === null);
+
+console.log('\ngoals (a conversation nudges a pursuit, it does not finish one)');
+const goals = [
+  { id: 'g1', title: 'Find out what happened to his brother', progress: 20, status: 'active', currentObjective: 'Get the witness to talk' },
+  { id: 'g2', title: 'Something abandoned', progress: 40, status: 'abandoned', currentObjective: '' },
+];
+check('goal 0 means nothing moved', resolveGoalUpdate({ goal: 0, progressDelta: 10 }, goals) === null);
+check('an unknown goal number is ignored', resolveGoalUpdate({ goal: 9, progressDelta: 10 }, goals) === null);
+check('a goal that is not active cannot move', resolveGoalUpdate({ goal: 2, progressDelta: 10 }, goals) === null);
+check(`progress is capped at ±${CONTEXT.MAX_GOAL_PROGRESS_DELTA} a turn`, resolveGoalUpdate({ goal: 1, progressDelta: 90 }, goals).applied === CONTEXT.MAX_GOAL_PROGRESS_DELTA);
+check('a character can lose ground', resolveGoalUpdate({ goal: 1, progressDelta: -90 }, goals).progress === 20 - CONTEXT.MAX_GOAL_PROGRESS_DELTA);
+check('progress stays within 0–100', resolveGoalUpdate({ goal: 1, progressDelta: -500 }, goals).progress >= 0);
+check('an update that changes nothing is dropped', resolveGoalUpdate({ goal: 1, progressDelta: 0, objective: '' }, goals) === null);
+check('a new next step alone counts', resolveGoalUpdate({ goal: 1, progressDelta: 0, objective: 'Stake out the docks' }, goals)?.currentObjective === 'Stake out the docks');
+check('the old next step is kept when not changed', resolveGoalUpdate({ goal: 1, progressDelta: 5 }, goals).currentObjective === 'Get the witness to talk');
+check('reaching 100 marks it achieved', resolveGoalUpdate({ goal: 1, progressDelta: 15 }, [{ ...goals[0], progress: 95 }]).achieved === true);
+check('garbage does not throw', resolveGoalUpdate(undefined, goals) === null && resolveGoalUpdate({ goal: 'x' }, goals) === null);
 
 console.log(failed ? `\n${failed} check(s) failed\n` : '\nall checks passed\n');
 process.exitCode = failed ? 1 : 0;

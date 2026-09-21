@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { listNpcs, getNpc, createNpc, updateNpc, deleteNpc } from '../data/npcs.js';
 import { listMemories, deleteMemoriesForNpc } from '../data/memories.js';
 import { listEvents } from '../data/events.js';
+import { listGoals, createGoals, updateGoal, deleteGoal } from '../data/goals.js';
+import { planGoals } from '../services/ai/goalService.js';
 import { deleteConversationsForNpc } from '../data/conversations.js';
 import { generateCharacterDraft } from '../services/ai/npcService.js';
 import {
@@ -10,6 +12,8 @@ import {
   RELATIONSHIP_KEYS,
   DEFAULT_RELATIONSHIP,
   DEFAULT_EMOTION,
+  GOAL_STATUSES,
+  CONTEXT,
 } from '../constants.js';
 import { KEVIN_CROSS } from '../samples.js';
 import { config } from '../config/env.js';
@@ -166,4 +170,62 @@ export async function portrait(req, res) {
   const updated = await updateNpc(req.db, npc.id, { portraitPath: path });
   recordPortrait(req.user.id);
   res.json(await withPortraitUrls(req.db, updated));
+}
+
+/** What the character is pursuing, achieved and abandoned ones included. */
+export async function goals(req, res) {
+  const npc = await getNpc(req.db, req.params.id);
+  if (!npc) return res.status(404).json({ error: 'NPC not found' });
+  res.json(await listGoals(req.db, npc.id));
+}
+
+/**
+ * Reads the character sheet and writes down what they are actually pursuing.
+ * Only fills the room left, so calling it twice cannot bury a character in
+ * goals — and it never touches ones already there.
+ */
+export async function planNpcGoals(req, res) {
+  const npc = await getNpc(req.db, req.params.id);
+  if (!npc) return res.status(404).json({ error: 'NPC not found' });
+
+  const existing = await listGoals(req.db, npc.id);
+  const room = CONTEXT.MAX_ACTIVE_GOALS - existing.filter((goal) => goal.status === 'active').length;
+  if (room <= 0) {
+    return res.status(400).json({
+      error: `${npc.name} is already pursuing ${CONTEXT.MAX_ACTIVE_GOALS} goals. Finish or remove one first.`,
+    });
+  }
+  const planned = (await planGoals(npc)).slice(0, room);
+  res.status(201).json(await createGoals(req.db, npc.id, planned));
+}
+
+function pickGoalFields(body = {}) {
+  const fields = {};
+  for (const [field, max] of [['title', 160], ['currentObjective', 200], ['obstacle', 200]]) {
+    if (typeof body[field] === 'string') fields[field] = body[field].trim().slice(0, max);
+  }
+  if (body.progress !== undefined) {
+    const progress = Number(body.progress);
+    if (Number.isFinite(progress)) fields.progress = Math.max(0, Math.min(100, Math.round(progress)));
+  }
+  if (GOAL_STATUSES.includes(body.status)) fields.status = body.status;
+  return fields;
+}
+
+export async function updateNpcGoal(req, res) {
+  const npc = await getNpc(req.db, req.params.id);
+  if (!npc) return res.status(404).json({ error: 'NPC not found' });
+  const fields = pickGoalFields(req.body);
+  if ('title' in fields && !fields.title) return res.status(400).json({ error: 'A goal needs a title' });
+  const goal = await updateGoal(req.db, npc.id, req.params.goalId, fields);
+  if (!goal) return res.status(404).json({ error: 'Goal not found' });
+  res.json(goal);
+}
+
+export async function removeNpcGoal(req, res) {
+  const npc = await getNpc(req.db, req.params.id);
+  if (!npc) return res.status(404).json({ error: 'NPC not found' });
+  const deleted = await deleteGoal(req.db, npc.id, req.params.goalId);
+  if (!deleted) return res.status(404).json({ error: 'Goal not found' });
+  res.json({ ok: true });
 }
