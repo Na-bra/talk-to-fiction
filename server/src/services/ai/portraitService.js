@@ -13,15 +13,18 @@ const sentence = (text, max) => clip(text, max).replace(/[.!?…]+$/, '');
  * Turns a character sheet into an image prompt. Secrets are never included:
  * a portrait is something the player sees.
  */
-export function buildPortraitPrompt(npc) {
+export function buildPortraitPrompt(npc, { plain = false } = {}) {
   const age = npc.age !== null && npc.age !== undefined && npc.age !== '' ? `${npc.age}-year-old` : '';
   const who = [age, npc.occupation || 'person'].filter(Boolean).join(' ');
   const traits = (npc.personality || []).slice(0, 4).join(', ').toLowerCase();
+  // The plain version drops the world and backstory. Crime, disappearances and
+  // other ordinary fiction can trip an image provider's safety filter, and a
+  // face does not need the plot to look like the person.
   return [
     `Head-and-shoulders character portrait of ${clip(npc.name, 80)}, a ${clip(who, 120)}.`,
-    npc.setting && `World: ${sentence(npc.setting, 220)}.`,
+    !plain && npc.setting && `World: ${sentence(npc.setting, 220)}.`,
     traits && `Their expression and bearing read as ${traits}.`,
-    npc.background && `Backstory, for mood only: ${clip(npc.background, 320)}`,
+    !plain && npc.background && `Backstory, for mood only: ${clip(npc.background, 320)}`,
     'Painterly digital illustration, cinematic soft lighting, muted colour palette, detailed face, looking toward the viewer, simple dark background.',
     'Single person. No text, letters, captions, logos, watermark or border.',
   ]
@@ -40,7 +43,14 @@ function sniff(bytes) {
   return null;
 }
 
-/** Draws a portrait with Cloudflare Workers AI. Returns { bytes, contentType }. */
+/**
+ * Draws a portrait with Cloudflare Workers AI. Returns { bytes, contentType }.
+ *
+ * The provider's safety filter rejects some character sheets — and does it
+ * inconsistently, so the same sheet can pass one minute and fail the next.
+ * A refusal is retried once without the world and backstory, which is usually
+ * what trips it.
+ */
 export async function generatePortrait(npc) {
   if (!hasImageKey()) {
     throw new AiError(
@@ -48,7 +58,16 @@ export async function generatePortrait(npc) {
       'Portraits are not configured. Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN in server/.env.',
     );
   }
+  try {
+    return await draw(npc, { plain: false });
+  } catch (error) {
+    if (error.code !== 'refused') throw error;
+    console.warn(`[portrait] ${npc.name}: sheet refused by the filter, retrying on identity alone`);
+    return draw(npc, { plain: true });
+  }
+}
 
+async function draw(npc, options) {
   let response;
   try {
     response = await fetch(
@@ -56,7 +75,7 @@ export async function generatePortrait(npc) {
       {
         method: 'POST',
         headers: { Authorization: `Bearer ${config.image.apiToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: buildPortraitPrompt(npc), steps: 4 }),
+        body: JSON.stringify({ prompt: buildPortraitPrompt(npc, options), steps: 4 }),
         signal: AbortSignal.timeout(60_000),
       },
     );
@@ -67,6 +86,8 @@ export async function generatePortrait(npc) {
   const body = await response.json().catch(() => ({}));
   if (!response.ok || body.success === false) {
     const message = (body.errors || []).map((error) => error.message).join('; ') || `HTTP ${response.status}`;
+    // The provider's own words, before they are turned into something friendly.
+    console.error(`[portrait] cloudflare HTTP ${response.status}: ${JSON.stringify(body.errors || body).slice(0, 300)}`);
     if (response.status === 401 || response.status === 403 || /authenticat|unauthori/i.test(message)) {
       throw new AiError('missing_key', 'Cloudflare rejected the credentials. Check CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN.');
     }

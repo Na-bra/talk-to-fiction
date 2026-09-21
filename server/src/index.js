@@ -42,6 +42,9 @@ app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 app.use((error, req, res, next) => {
   if (error instanceof AiError) {
     const status = { missing_key: 503, refused: 422, quota: 429 }[error.code] ?? 502;
+    // Log it: without this the provider's own message never reaches anyone, and
+    // a transient failure is indistinguishable from a real refusal.
+    console.error(`[ai] ${req.method} ${req.originalUrl} -> ${status} [${error.code}] ${error.message}`);
     return res.status(status).json({ error: error.message, code: error.code });
   }
   if (error instanceof DbError) {
